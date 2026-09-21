@@ -50,6 +50,10 @@ func launchPage(timeout time.Duration) (page, func(), error) {
 	l := launcher.New().Headless(true)
 	controlURL, err := l.Launch()
 	if err != nil {
+		// Launch can fail after it has already started the browser
+		// process (e.g. it started but never reported its DevTools URL);
+		// killAndCleanup only acts when that actually happened.
+		killAndCleanup(l)
 		return nil, nil, fmt.Errorf("carrierproxy: launch browser: %w", err)
 	}
 
@@ -59,8 +63,7 @@ func launchPage(timeout time.Duration) (page, func(), error) {
 		// failed to dial it, so unlike release() below (which needs a
 		// live CDP connection to ask the browser to close itself) the
 		// launcher itself has to be the one to kill it, or it leaks.
-		l.Kill()
-		l.Cleanup()
+		killAndCleanup(l)
 		return nil, nil, fmt.Errorf("carrierproxy: connect browser: %w", err)
 	}
 
@@ -81,6 +84,19 @@ func launchPage(timeout time.Duration) (page, func(), error) {
 	}
 
 	return rodPage{p: rodPg.Timeout(timeout)}, release, nil
+}
+
+// killAndCleanup kills the process l started, if any, and removes its
+// temporary profile directory. l.PID() is 0 until Launch actually starts
+// a process, so a pre-start failure (the browser binary missing, say)
+// leaves nothing to kill; calling Cleanup in that case would block
+// forever waiting for an exit that will never come, so it's skipped too.
+func killAndCleanup(l *launcher.Launcher) {
+	if l.PID() == 0 {
+		return
+	}
+	l.Kill()
+	l.Cleanup()
 }
 
 // rodPage adapts *rod.Page to the page interface.
