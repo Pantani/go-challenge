@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><title>Fixture Policies</title></head>
+<body>
+  <table>
+    <tr><th>Carrier</th><th>Policy Number</th></tr>
+    {{range .Policies}}<tr><td>{{.CarrierID}}</td><td>{{.PolicyNumber}}</td></tr>
+    {{end}}
+  </table>
+</body>
+</html>
