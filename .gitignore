@@ -1,1 +1,6 @@
+.DS_Store
 .scratch
+CLAUDE.md
+.claude/
+.idea/
+_workspace/
