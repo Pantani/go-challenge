@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -30,25 +31,29 @@ func TestLoginIntegration(t *testing.T) {
 		t.Skip("set CARRIERPROXY_USERNAME and CARRIERPROXY_PASSWORD to run this test against a local fixture site")
 	}
 
-	site := newFixtureSite(t, username, password)
+	srv, site := newFixtureSite(t, username, password)
 
 	t.Run("valid credentials succeed", func(t *testing.T) {
-		client := NewClient(site.URL + "/login")
+		client := NewClient(srv.URL + "/login")
 		if err := client.Login(username, password); err != nil {
 			t.Fatalf("expected login to succeed, got %v", err)
 		}
 	})
 
 	t.Run("invalid credentials are rejected without retrying", func(t *testing.T) {
-		client := NewClient(site.URL+"/login", WithRetries(2))
+		before := site.LoginAttempts()
+		client := NewClient(srv.URL+"/login", WithRetries(2))
 		err := client.Login("not-a-real-user", "not-a-real-password")
 		if !errors.Is(err, carrierproxy.ErrInvalidCredentials) {
 			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 		}
+		if got := site.LoginAttempts() - before; got != 1 {
+			t.Fatalf("expected exactly 1 POST /login for invalid credentials despite WithRetries(2), got %d", got)
+		}
 	})
 
 	t.Run("a wrong selector times out with a classifiable error", func(t *testing.T) {
-		client := NewClient(site.URL+"/login",
+		client := NewClient(srv.URL+"/login",
 			WithUsernameSelector("#this-field-does-not-exist"),
 			WithTimeout(3*time.Second),
 			WithRetries(0),
@@ -70,7 +75,7 @@ func TestLoginIntegration(t *testing.T) {
 	})
 
 	t.Run("Policies requires login, then lists real rows", func(t *testing.T) {
-		client := NewClient(site.URL+"/login", WithPoliciesURL(site.URL+"/policies"))
+		client := NewClient(srv.URL+"/login", WithPoliciesURL(srv.URL+"/policies"))
 
 		if _, err := client.Policies(); !errors.Is(err, carrierproxy.ErrNotLoggedIn) {
 			t.Fatalf("expected ErrNotLoggedIn before Login, got %v", err)
@@ -83,14 +88,14 @@ func TestLoginIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected Policies to succeed, got %v", err)
 		}
-		if len(policies) != len(fixturePolicies) || policies[0] != fixturePolicies[0] {
+		if !reflect.DeepEqual(policies, fixturePolicies) {
 			t.Fatalf("got %+v, want %+v", policies, fixturePolicies)
 		}
 	})
 
 	t.Run("DocumentDownload requires login, then fetches a real file", func(t *testing.T) {
-		client := NewClient(site.URL+"/login", WithDocumentURL(func(key string) string {
-			return site.URL + "/download/" + key
+		client := NewClient(srv.URL+"/login", WithDocumentURL(func(key string) string {
+			return srv.URL + "/download/" + key
 		}))
 
 		if _, err := client.DocumentDownload(fixtureDocumentKey); !errors.Is(err, carrierproxy.ErrNotLoggedIn) {
@@ -106,12 +111,16 @@ func TestLoginIntegration(t *testing.T) {
 		}
 		defer func() { _ = rc.Close() }()
 
-		body, err := io.ReadAll(rc)
+		got, err := io.ReadAll(rc)
 		if err != nil {
 			t.Fatalf("expected to read the document body, got %v", err)
 		}
-		if len(body) == 0 {
-			t.Fatal("expected a non-empty document body")
+		want, err := os.ReadFile("testdata/" + fixtureDocumentKey)
+		if err != nil {
+			t.Fatalf("read fixture document for comparison: %v", err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("got document body %q, want %q", got, want)
 		}
 	})
 }

@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/carrierproxy"
@@ -37,10 +38,12 @@ func (c *Client) DocumentDownload(downloadKey string) (io.ReadCloser, error) {
 	return doc, err
 }
 
-// validateDownloadKey rejects a key that is empty or could escape the URL
-// WithDocumentURL builds from it.
+// validateDownloadKey rejects a key that is empty, ".", "..", or contains
+// a path separator — the cases that could make WithDocumentURL's builder
+// construct a URL pointing outside the single path segment downloadKey is
+// meant to occupy.
 func validateDownloadKey(downloadKey string) error {
-	if downloadKey == "" || strings.ContainsAny(downloadKey, "/\\") {
+	if downloadKey == "" || downloadKey == "." || downloadKey == ".." || strings.ContainsAny(downloadKey, "/\\") {
 		return fmt.Errorf("carrierproxy: invalid downloadKey %q", downloadKey)
 	}
 	return nil
@@ -61,5 +64,9 @@ func (c *Client) fetchDocument(creds credentials, downloadKey string) (io.ReadCl
 		return nil, fmt.Errorf("carrierproxy: read session cookies: %w", err)
 	}
 
-	return c.fetch(c.opts.documentURL(downloadKey), cookies, c.opts.timeout)
+	// downloadKey is percent-encoded for a single path segment before
+	// reaching the caller's URL builder, so it can never inject a query
+	// string, fragment, or extra path segment even though
+	// validateDownloadKey only rejects the clearly-invalid cases.
+	return c.fetch(c.opts.documentURL(url.PathEscape(downloadKey)), cookies, c.opts.timeout)
 }

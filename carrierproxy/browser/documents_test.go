@@ -39,10 +39,32 @@ func TestClientDocumentDownload(t *testing.T) {
 		c := NewClient(testLoginURL, WithDocumentURL(testDocumentURL))
 		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
 
-		for _, key := range []string{"", "has/slash", `has\backslash`} {
+		for _, key := range []string{"", ".", "..", "has/slash", `has\backslash`} {
 			if _, err := c.DocumentDownload(key); err == nil {
 				t.Fatalf("expected an error for downloadKey %q", key)
 			}
+		}
+	})
+
+	t.Run("percent-encodes the downloadKey before building the URL", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithDocumentURL(testDocumentURL), WithRetries(0))
+		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
+		fp := successPage()
+		c.newPage = func(time.Duration) (page, func(), error) { return fp, func() {}, nil }
+
+		var gotURL string
+		c.fetch = func(url string, _ []cookie, _ time.Duration) (io.ReadCloser, error) {
+			gotURL = url
+			return io.NopCloser(strings.NewReader("")), nil
+		}
+
+		if _, err := c.DocumentDownload("a report?.pdf"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "https://example.com/download/a%20report%3F.pdf"
+		if gotURL != want {
+			t.Fatalf("got URL %q, want %q", gotURL, want)
 		}
 	})
 
@@ -119,6 +141,8 @@ func TestValidateDownloadKey(t *testing.T) {
 	}{
 		"valid key":            {"policy-42.pdf", false},
 		"empty key":            {"", true},
+		"exactly a dot":        {".", true},
+		"exactly two dots":     {"..", true},
 		"forward slash":        {"a/b", true},
 		"backslash":            {`a\b`, true},
 		"dots without a slash": {"..policy", false},

@@ -57,27 +57,45 @@ func (c *Client) scrapePolicies(creds credentials) ([]carrierproxy.Policy, error
 	return parsePolicyRows(rows, c.opts.policyCellSelector)
 }
 
-// parsePolicyRows reads the first two cells of each row as CarrierID and
-// PolicyNumber, skipping rows with fewer than two matching cells (such as
-// a header row).
+// parsePolicyRows reads each row into a Policy via parsePolicyRow,
+// keeping only the ones that aren't a non-data row.
 func parsePolicyRows(rows []element, cellSelector string) ([]carrierproxy.Policy, error) {
 	policies := make([]carrierproxy.Policy, 0, len(rows))
 	for _, row := range rows {
-		cells, err := row.Elements(cellSelector)
-		if err != nil {
-			return nil, fmt.Errorf("carrierproxy: read policy row: %w", err)
-		}
-		if len(cells) < 2 {
-			continue
-		}
-
-		policy, err := newPolicy(cells)
+		policy, ok, err := parsePolicyRow(row, cellSelector)
 		if err != nil {
 			return nil, err
 		}
-		policies = append(policies, policy)
+		if ok {
+			policies = append(policies, policy)
+		}
 	}
 	return policies, nil
+}
+
+// parsePolicyRow reads one row's first two cells into a Policy. ok is
+// false for a non-data row (zero matching cells, such as a header row
+// using <th> instead of <td>), which the caller should skip rather than
+// keep. The row selector is documented to match one element per policy,
+// so a row with exactly one cell is malformed data, not a header, and is
+// reported as carrierproxy.ErrMalformedResponse rather than skipped.
+func parsePolicyRow(row element, cellSelector string) (policy carrierproxy.Policy, ok bool, err error) {
+	cells, err := row.Elements(cellSelector)
+	if err != nil {
+		return carrierproxy.Policy{}, false, fmt.Errorf("carrierproxy: read policy row: %w", err)
+	}
+	if len(cells) == 0 {
+		return carrierproxy.Policy{}, false, nil
+	}
+	if len(cells) < 2 {
+		return carrierproxy.Policy{}, false, fmt.Errorf("%w: policy row has %d cells, expected at least 2", carrierproxy.ErrMalformedResponse, len(cells))
+	}
+
+	policy, err = newPolicy(cells)
+	if err != nil {
+		return carrierproxy.Policy{}, false, err
+	}
+	return policy, true, nil
 }
 
 // newPolicy reads a Policy from a row's first two cells.

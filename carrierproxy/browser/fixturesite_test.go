@@ -34,13 +34,16 @@ type fixtureSite struct {
 	username, password    string
 	loginTpl, policiesTpl *template.Template
 
-	mu       sync.Mutex
-	sessions map[string]bool
+	mu            sync.Mutex
+	sessions      map[string]bool
+	loginAttempts int
 }
 
 // newFixtureSite starts a fixture site that accepts username/password,
-// and registers its shutdown with t.Cleanup.
-func newFixtureSite(t *testing.T, username, password string) *httptest.Server {
+// and registers its shutdown with t.Cleanup. It returns both the server
+// (for its URL) and the site (for LoginAttempts, used to assert on retry
+// behavior from outside).
+func newFixtureSite(t *testing.T, username, password string) (*httptest.Server, *fixtureSite) {
 	t.Helper()
 
 	site := &fixtureSite{
@@ -58,7 +61,15 @@ func newFixtureSite(t *testing.T, username, password string) *httptest.Server {
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, site
+}
+
+// LoginAttempts returns how many POST /login requests this site has
+// received so far. Safe for concurrent use.
+func (s *fixtureSite) LoginAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginAttempts
 }
 
 // handleLogin renders the login form, and on POST checks the submitted
@@ -66,6 +77,9 @@ func newFixtureSite(t *testing.T, username, password string) *httptest.Server {
 func (s *fixtureSite) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var data struct{ Flash *flash }
 	if r.Method == http.MethodPost {
+		s.mu.Lock()
+		s.loginAttempts++
+		s.mu.Unlock()
 		data.Flash = s.tryLogin(w, r)
 	}
 	_ = s.loginTpl.Execute(w, data)

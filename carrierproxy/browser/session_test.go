@@ -2,6 +2,7 @@ package browser
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,30 @@ func TestAttemptBudget(t *testing.T) {
 			t.Parallel()
 			if got := attemptBudget(tc.retries); got != tc.want {
 				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsFinal(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"invalid credentials":                      {carrierproxy.ErrInvalidCredentials, true},
+		"malformed response":                       {carrierproxy.ErrMalformedResponse, true},
+		"wrapped invalid credentials":              {fmt.Errorf("submit login form: %w", carrierproxy.ErrInvalidCredentials), true},
+		"an unrelated error":                       {errors.New("boom"), false},
+		"not logged in is retryable at this level": {carrierproxy.ErrNotLoggedIn, false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := isFinal(tc.err); got != tc.want {
+				t.Fatalf("isFinal(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -79,6 +104,20 @@ func TestClientWithRetries(t *testing.T) {
 		err := c.withRetries(func() error { calls++; return carrierproxy.ErrInvalidCredentials })
 		if !errors.Is(err, carrierproxy.ErrInvalidCredentials) {
 			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("expected exactly 1 call, got %d", calls)
+		}
+	})
+
+	t.Run("never retries a malformed response", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithRetries(3))
+		c.sleep = func(time.Duration) { t.Fatal("should not sleep: a malformed response must not be retried") }
+		calls := 0
+		err := c.withRetries(func() error { calls++; return carrierproxy.ErrMalformedResponse })
+		if !errors.Is(err, carrierproxy.ErrMalformedResponse) {
+			t.Fatalf("expected ErrMalformedResponse, got %v", err)
 		}
 		if calls != 1 {
 			t.Fatalf("expected exactly 1 call, got %d", calls)

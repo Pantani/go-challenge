@@ -83,6 +83,28 @@ func TestClientPolicies(t *testing.T) {
 			t.Fatalf("expected 2 attempts, got %d", calls)
 		}
 	})
+
+	t.Run("never retries a malformed row", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithPoliciesURL(testPoliciesURL), WithRetries(2))
+		c.sleep = func(time.Duration) { t.Fatal("should not sleep: a malformed row must not be retried") }
+		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
+
+		fp := successPage()
+		fp.elementLists["tr"] = []*fakeElement{fakeRow("td", "only-one")}
+		calls := 0
+		c.newPage = func(time.Duration) (page, func(), error) {
+			calls++
+			return fp, func() {}, nil
+		}
+
+		if _, err := c.Policies(); !errors.Is(err, carrierproxy.ErrMalformedResponse) {
+			t.Fatalf("expected ErrMalformedResponse, got %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("expected exactly 1 attempt, got %d", calls)
+		}
+	})
 }
 
 func TestScrapePolicies(t *testing.T) {
@@ -176,11 +198,10 @@ func TestParsePolicyRows(t *testing.T) {
 		}
 	})
 
-	t.Run("skips rows with fewer than two cells, such as a header row", func(t *testing.T) {
+	t.Run("skips a header row with zero matching cells", func(t *testing.T) {
 		t.Parallel()
 		rows := []element{
 			fakeRow("td"),
-			fakeRow("td", "only-one"),
 			fakeRow("td", "CARRIER-1", "POL-100"),
 		}
 		got, err := parsePolicyRows(rows, "td")
@@ -189,6 +210,14 @@ func TestParsePolicyRows(t *testing.T) {
 		}
 		if len(got) != 1 {
 			t.Fatalf("expected 1 policy, got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("a row with exactly one cell is malformed, not a header, and is an error", func(t *testing.T) {
+		t.Parallel()
+		rows := []element{fakeRow("td", "only-one")}
+		if _, err := parsePolicyRows(rows, "td"); !errors.Is(err, carrierproxy.ErrMalformedResponse) {
+			t.Fatalf("expected ErrMalformedResponse, got %v", err)
 		}
 	})
 

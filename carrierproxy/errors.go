@@ -16,4 +16,10 @@ var (
 	// site-specific configuration (such as a target URL) that was not
 	// supplied.
 	ErrNotConfigured = errors.New("carrierproxy: not configured")
+
+	// ErrMalformedResponse is returned when the target site's response
+	// doesn't match the shape a PolicyProvider method expects (such as a
+	// policy row with the wrong number of cells). It is never retried,
+	// since the same response would just fail to parse again.
+	ErrMalformedResponse = errors.New("carrierproxy: malformed response")
 )

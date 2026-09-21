@@ -56,21 +56,31 @@ func launchPage(timeout time.Duration) (page, func(), error) {
 	b := rod.New().ControlURL(controlURL)
 	if err := b.Connect(); err != nil {
 		// Launch already started the browser process; Connect merely
-		// failed to dial it, so unlike b.Close() (which needs a live CDP
-		// connection to ask the browser to close itself) the launcher
-		// itself has to be the one to kill it, or it leaks.
+		// failed to dial it, so unlike release() below (which needs a
+		// live CDP connection to ask the browser to close itself) the
+		// launcher itself has to be the one to kill it, or it leaks.
 		l.Kill()
 		l.Cleanup()
 		return nil, nil, fmt.Errorf("carrierproxy: connect browser: %w", err)
 	}
 
+	// b.Close() only asks the browser to exit; it leaves the temporary
+	// profile directory Launch created behind. l.Cleanup() waits for the
+	// browser to actually exit and removes that directory, so every
+	// launch this function returns successfully from must be paired with
+	// a release() call, on both the success and page-open-failure paths.
+	release := func() {
+		_ = b.Close()
+		l.Cleanup()
+	}
+
 	rodPg, err := b.Page(proto.TargetCreateTarget{})
 	if err != nil {
-		_ = b.Close()
+		release()
 		return nil, nil, fmt.Errorf("carrierproxy: open page: %w", err)
 	}
 
-	return rodPage{p: rodPg.Timeout(timeout)}, func() { _ = b.Close() }, nil
+	return rodPage{p: rodPg.Timeout(timeout)}, release, nil
 }
 
 // rodPage adapts *rod.Page to the page interface.

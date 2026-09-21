@@ -58,20 +58,28 @@ func (c *Client) authenticatedPage(username, password string) (page, func(), err
 }
 
 // withRetries calls attempt, retrying up to opts.retries additional times
-// if it returns a non-nil error other than carrierproxy.ErrInvalidCredentials
-// (which is never retried, since the same credentials would just fail
-// again), waiting opts.retryDelay between attempts.
+// if it returns a non-nil, non-final error (see isFinal), waiting
+// opts.retryDelay between attempts.
 func (c *Client) withRetries(attempt func() error) error {
 	var err error
 	for i := 0; i < attemptBudget(c.opts.retries); i++ {
 		if i > 0 {
 			c.sleep(c.opts.retryDelay)
 		}
-		if err = attempt(); err == nil || errors.Is(err, carrierproxy.ErrInvalidCredentials) {
+		if err = attempt(); err == nil || isFinal(err) {
 			return err
 		}
 	}
 	return err
+}
+
+// isFinal reports whether err would just happen again on a retry:
+// carrierproxy.ErrInvalidCredentials means the same credentials would
+// fail the same way, and carrierproxy.ErrMalformedResponse means the
+// target's response didn't match the expected shape, which retrying
+// won't reshape.
+func isFinal(err error) bool {
+	return errors.Is(err, carrierproxy.ErrInvalidCredentials) || errors.Is(err, carrierproxy.ErrMalformedResponse)
 }
 
 // attemptBudget returns how many attempts to make for a given retries

@@ -175,6 +175,28 @@ func TestEvaluateLoginResult(t *testing.T) {
 		}
 	})
 
+	t.Run("a class that merely contains the success token as a substring is not a match", func(t *testing.T) {
+		t.Parallel()
+		p := newFakePage()
+		p.elements[opts.resultSelector] = &fakeElement{attr: "flash unsuccessful", text: "Your login was unsuccessful"}
+		err := evaluateLoginResult(p, opts)
+		if !errors.Is(err, carrierproxy.ErrInvalidCredentials) {
+			t.Fatalf("expected ErrInvalidCredentials for a merely-substring class match, got %v", err)
+		}
+	})
+
+	t.Run("an empty success class is a configuration error", func(t *testing.T) {
+		t.Parallel()
+		p := newFakePage()
+		p.elements[opts.resultSelector] = &fakeElement{attr: "flash success"}
+		badOpts := opts
+		badOpts.successClass = ""
+		err := evaluateLoginResult(p, badOpts)
+		if !errors.Is(err, carrierproxy.ErrNotConfigured) {
+			t.Fatalf("expected ErrNotConfigured, got %v", err)
+		}
+	})
+
 	t.Run("error class carries message", func(t *testing.T) {
 		t.Parallel()
 		p := newFakePage()
@@ -217,6 +239,31 @@ func TestEvaluateLoginResult(t *testing.T) {
 			t.Fatalf("expected %v, got %v", wantErr, err)
 		}
 	})
+}
+
+func TestHasClassToken(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		classAttr, token string
+		want             bool
+	}{
+		"exact single class":       {"success", "success", true},
+		"one of several classes":   {"flash success", "success", true},
+		"substring is not a match": {"unsuccessful", "success", false},
+		"prefix is not a match":    {"success-banner", "success", false},
+		"no match at all":          {"flash error", "success", false},
+		"empty class attribute":    {"", "success", false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasClassToken(tc.classAttr, tc.token); got != tc.want {
+				t.Fatalf("hasClassToken(%q, %q) = %v, want %v", tc.classAttr, tc.token, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestClientLogin(t *testing.T) {

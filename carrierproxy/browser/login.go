@@ -89,6 +89,10 @@ func clickSubmit(pg page, selector string) error {
 // evaluateLoginResult reads the post-submit result banner and turns it into
 // a Go error, using its CSS class to tell success from failure.
 func evaluateLoginResult(pg page, opts options) error {
+	if opts.successClass == "" {
+		return fmt.Errorf("%w: WithSuccessClass must not be empty", carrierproxy.ErrNotConfigured)
+	}
+
 	el, err := pg.Element(opts.resultSelector)
 	if err != nil {
 		return fmt.Errorf("carrierproxy: locate result banner: %w", err)
@@ -98,7 +102,7 @@ func evaluateLoginResult(pg page, opts options) error {
 	if err != nil {
 		return fmt.Errorf("carrierproxy: read result banner: %w", err)
 	}
-	if strings.Contains(class, opts.successClass) {
+	if hasClassToken(class, opts.successClass) {
 		return nil
 	}
 
@@ -107,4 +111,17 @@ func evaluateLoginResult(pg page, opts options) error {
 		message = ""
 	}
 	return fmt.Errorf("%w: %s", carrierproxy.ErrInvalidCredentials, strings.TrimSpace(message))
+}
+
+// hasClassToken reports whether classAttr (a space-separated CSS class
+// list, as a browser reports a multi-class attribute) contains token as a
+// complete class, not merely a substring — "success" must not match
+// "unsuccessful".
+func hasClassToken(classAttr, token string) bool {
+	for _, c := range strings.Fields(classAttr) {
+		if c == token {
+			return true
+		}
+	}
+	return false
 }
