@@ -27,10 +27,7 @@ func (sl *SendLog) ExtractMessage() json.RawMessage {
 type SendLogs []SendLog
 
 func (s SendLogs) IsEmpty() bool {
-	if len(s) == 0 {
-		return true
-	}
-	return false
+	return len(s) == 0
 }
 
 // Last will return the last created log
