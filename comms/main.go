@@ -35,6 +35,7 @@ func main() {
 	http.HandleFunc("/api/comms/add-policy-vehicle", handlers.AddPolicyVehicle(emailsvc))
 	http.HandleFunc("/api/comms/add-policy-driver", handlers.AddPolicyDriver(emailsvc))
 	http.HandleFunc("/api/comms/add-policy-address", handlers.AddPolicyAddress(emailsvc))
+	http.HandleFunc("/api/comms/add-policy-coverage", handlers.AddPolicyCoverage(emailsvc))
 
 	// start the api server
 	log.Print("starting server...")
