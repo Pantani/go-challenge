@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 func TestFetchWithCookies(t *testing.T) {
 	t.Parallel()
 
-	t.Run("attaches cookies and returns the body", func(t *testing.T) {
+	t.Run("attaches a cookie scoped to the request's own host", func(t *testing.T) {
 		t.Parallel()
 		var gotCookies []*http.Cookie
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -19,8 +20,9 @@ func TestFetchWithCookies(t *testing.T) {
 			_, _ = w.Write([]byte("document contents"))
 		}))
 		defer srv.Close()
+		host := serverHost(t, srv)
 
-		rc, err := fetchWithCookies(srv.URL, []cookie{{name: "session", value: "abc123"}}, 5*time.Second)
+		rc, err := fetchWithCookies(srv.URL, []cookie{{name: "session", value: "abc123", domain: host, path: "/"}}, 5*time.Second)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -35,6 +37,42 @@ func TestFetchWithCookies(t *testing.T) {
 		}
 		if len(gotCookies) != 1 || gotCookies[0].Name != "session" || gotCookies[0].Value != "abc123" {
 			t.Fatalf("got cookies %+v, want session=abc123", gotCookies)
+		}
+	})
+
+	t.Run("does not leak a cookie scoped to a different host", func(t *testing.T) {
+		t.Parallel()
+		var gotCookies []*http.Cookie
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotCookies = r.Cookies()
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+
+		_, err := fetchWithCookies(srv.URL, []cookie{{name: "other-session", value: "leak-me-not", domain: "some-other-host.example", path: "/"}}, 5*time.Second)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(gotCookies) != 0 {
+			t.Fatalf("expected no cookies to be sent, got %+v", gotCookies)
+		}
+	})
+
+	t.Run("ignores a cookie with no domain rather than sending it everywhere", func(t *testing.T) {
+		t.Parallel()
+		var gotCookies []*http.Cookie
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotCookies = r.Cookies()
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+
+		_, err := fetchWithCookies(srv.URL, []cookie{{name: "no-domain", value: "x"}}, 5*time.Second)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(gotCookies) != 0 {
+			t.Fatalf("expected no cookies to be sent, got %+v", gotCookies)
 		}
 	})
 
@@ -61,4 +99,15 @@ func TestFetchWithCookies(t *testing.T) {
 			t.Fatal("expected an error for an unreachable host")
 		}
 	})
+}
+
+// serverHost returns srv's bare hostname (no port), matching what a
+// cookie's Domain attribute would hold for it.
+func serverHost(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	return u.Hostname()
 }

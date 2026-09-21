@@ -29,11 +29,17 @@ type element interface {
 	Elements(selector string) ([]element, error)
 }
 
-// cookie is a minimal session cookie, decoupled from go-rod's proto types
-// so the page interface stays fakeable.
+// cookie is a session cookie, decoupled from go-rod's proto types so the
+// page interface stays fakeable. It keeps the scoping attributes a real
+// browser would enforce (domain, path, secure) so a request to a
+// different host than the one the cookie came from doesn't receive it;
+// see fetchWithCookies in http.go.
 type cookie struct {
-	name  string
-	value string
+	name   string
+	value  string
+	domain string
+	path   string
+	secure bool
 }
 
 // launchPage starts a headless browser, opens a blank page on it bounded
@@ -41,13 +47,20 @@ type cookie struct {
 // browser. It is the only function in this package that talks to go-rod
 // directly.
 func launchPage(timeout time.Duration) (page, func(), error) {
-	controlURL, err := launcher.New().Headless(true).Launch()
+	l := launcher.New().Headless(true)
+	controlURL, err := l.Launch()
 	if err != nil {
 		return nil, nil, fmt.Errorf("carrierproxy: launch browser: %w", err)
 	}
 
 	b := rod.New().ControlURL(controlURL)
 	if err := b.Connect(); err != nil {
+		// Launch already started the browser process; Connect merely
+		// failed to dial it, so unlike b.Close() (which needs a live CDP
+		// connection to ask the browser to close itself) the launcher
+		// itself has to be the one to kill it, or it leaks.
+		l.Kill()
+		l.Cleanup()
 		return nil, nil, fmt.Errorf("carrierproxy: connect browser: %w", err)
 	}
 
@@ -99,7 +112,7 @@ func (r rodPage) Cookies() ([]cookie, error) {
 	}
 	cookies := make([]cookie, len(raw))
 	for i, c := range raw {
-		cookies[i] = cookie{name: c.Name, value: c.Value}
+		cookies[i] = cookie{name: c.Name, value: c.Value, domain: c.Domain, path: c.Path, secure: c.Secure}
 	}
 	return cookies, nil
 }
