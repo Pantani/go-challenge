@@ -41,7 +41,7 @@ func TestMockSetGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting file: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	got, err := io.ReadAll(reader)
 	if err != nil {
