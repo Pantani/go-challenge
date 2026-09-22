@@ -47,7 +47,6 @@ func (c *Client) Set(_ context.Context, filename string, fileBytes []byte, _ str
 		return err
 	}
 	c.bucket.Objects[c.key(filename)] = file
-	defer file.Close()
 	return nil
 }
 
