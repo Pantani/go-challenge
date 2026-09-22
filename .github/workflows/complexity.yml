@@ -1,0 +1,44 @@
+name: Complexity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  complexity:
+    name: Complexity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
+      - name: Check cyclomatic & cognitive complexity
+        run: |
+          exit_code=0
+          for mod in $(find . -mindepth 2 -maxdepth 2 -name go.mod -exec dirname {} \; | sed 's|^\./||' | sort); do
+            echo "::group::$mod"
+            if ! (cd "$mod" && golangci-lint run --config "$GITHUB_WORKSPACE/.golangci-complexity.yml" ./...); then
+              exit_code=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$exit_code"
