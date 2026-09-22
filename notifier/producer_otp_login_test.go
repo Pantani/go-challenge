@@ -1,19 +1,20 @@
-package main
+package notifier_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email/mockemail"
 )
 
 func TestNotifyOTPLogin(t *testing.T) {
 	mail := mockemail.NewClient()
-	producer := NewProducer(mail)
+	producer := notifier.NewProducer(mail)
 
-	err := producer.NotifyTopic(context.Background(), TopicOTPLogin, OTPLoginInput{
+	err := producer.NotifyTopic(context.Background(), notifier.TopicOTPLogin, notifier.OTPLoginInput{
 		Recipient:      "user@example.com",
 		OTPCode:        "123456",
 		ExpirationMins: 5,
@@ -44,23 +45,23 @@ func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 	}{
 		"wrong input type": {
 			input:   "not-an-otp-login-input",
-			wantErr: ErrInvalidOTPLoginInput,
+			wantErr: notifier.ErrInvalidOTPLoginInput,
 		},
 		"missing recipient": {
-			input:   OTPLoginInput{OTPCode: "123456", ExpirationMins: 5},
-			wantErr: ErrOTPLoginMissingRecipient,
+			input:   notifier.OTPLoginInput{OTPCode: "123456", ExpirationMins: 5},
+			wantErr: notifier.ErrOTPLoginMissingRecipient,
 		},
 		"missing otp code": {
-			input:   OTPLoginInput{Recipient: "user@example.com", ExpirationMins: 5},
-			wantErr: ErrOTPLoginMissingCode,
+			input:   notifier.OTPLoginInput{Recipient: "user@example.com", ExpirationMins: 5},
+			wantErr: notifier.ErrOTPLoginMissingCode,
 		},
 		"zero expiration": {
-			input:   OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: 0},
-			wantErr: ErrOTPLoginInvalidExpiration,
+			input:   notifier.OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: 0},
+			wantErr: notifier.ErrOTPLoginInvalidExpiration,
 		},
 		"negative expiration": {
-			input:   OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: -1},
-			wantErr: ErrOTPLoginInvalidExpiration,
+			input:   notifier.OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: -1},
+			wantErr: notifier.ErrOTPLoginInvalidExpiration,
 		},
 	}
 
@@ -68,7 +69,7 @@ func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mail := mockemail.NewClient()
 
-			err := NewProducer(mail).NotifyTopic(context.Background(), TopicOTPLogin, tc.input)
+			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicOTPLogin, tc.input)
 			if err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
@@ -89,7 +90,7 @@ func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 func TestNotifyOTPLoginExpirationBoundary(t *testing.T) {
 	mail := mockemail.NewClient()
 
-	err := NewProducer(mail).NotifyTopic(context.Background(), TopicOTPLogin, OTPLoginInput{
+	err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicOTPLogin, notifier.OTPLoginInput{
 		Recipient:      "user@example.com",
 		OTPCode:        "123456",
 		ExpirationMins: 1,

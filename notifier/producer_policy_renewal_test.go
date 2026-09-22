@@ -1,4 +1,4 @@
-package main
+package notifier_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email/mockemail"
 )
@@ -19,10 +20,10 @@ func assertEqual(t *testing.T, label string, want, got any) {
 
 func TestNotifyPolicyRenewal(t *testing.T) {
 	mail := mockemail.NewClient()
-	producer := NewProducer(mail)
+	producer := notifier.NewProducer(mail)
 
 	renewalDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
-	err := producer.NotifyTopic(context.Background(), TopicPolicyRenewal, PolicyRenewalInput{
+	err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, notifier.PolicyRenewalInput{
 		Recipient:    "user@example.com",
 		PolicyNumber: "POL-123",
 		RenewalDate:  renewalDate,
@@ -51,19 +52,19 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 	}{
 		"wrong input type": {
 			input:   "not-a-policy-renewal-input",
-			wantErr: ErrInvalidPolicyRenewalInput,
+			wantErr: notifier.ErrInvalidPolicyRenewalInput,
 		},
 		"missing recipient": {
-			input:   PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
-			wantErr: ErrPolicyRenewalMissingRecipient,
+			input:   notifier.PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingRecipient,
 		},
 		"missing policy number": {
-			input:   PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
-			wantErr: ErrPolicyRenewalMissingPolicyNumber,
+			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingPolicyNumber,
 		},
 		"missing renewal date": {
-			input:   PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
-			wantErr: ErrPolicyRenewalMissingRenewalDate,
+			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+			wantErr: notifier.ErrPolicyRenewalMissingRenewalDate,
 		},
 	}
 
@@ -77,7 +78,7 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mail := mockemail.NewClient()
 
-			err := NewProducer(mail).NotifyTopic(context.Background(), TopicPolicyRenewal, tc.input)
+			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, tc.input)
 			if err == nil {
 				t.Fatalf("expected error for %s", name)
 			}

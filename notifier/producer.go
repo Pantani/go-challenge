@@ -1,4 +1,6 @@
-package main
+// Package notifier turns typed business inputs into email delivery
+// requests, routed by notification topic.
+package notifier
 
 import (
 	"context"
