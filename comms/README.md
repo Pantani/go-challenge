@@ -81,11 +81,10 @@ Before delivery the CC list is normalised so the provider is never asked to copy
 
 **`main.go` is configurable and defensive.** `loadConfig` reads the environment (see Usage) and falls back to the built-in defaults; `newMux(emailsvc)` builds the route table on a fresh `http.ServeMux` rather than the global default; `newServer` wraps it in an `http.Server` with read-header, read, write and idle timeouts. [`main_test.go`](main_test.go) drives `newMux` through `httptest.NewServer` with real HTTP requests, table-tests `loadConfig`, checks `newServer`'s timeouts, and covers `run` by handing it a port the test already holds so `ListenAndServe` fails immediately.
 
-Every function in the module is kept small and single-purpose, within the repo's CI limits of cyclomatic complexity ≤ 6 and cognitive complexity ≤ 8 (`golangci-lint run --config ../.golangci-complexity.yml ./...`). The current maxima are cyclomatic 5 (`normalizeCC`, `envelope.validate`) and cognitive 6 (`sendHandler`):
+Functions stay within the repo's complexity limits (cyclomatic ≤ 6, cognitive ≤ 8), enforced in CI:
 
 ```bash
-go run github.com/fzipp/gocyclo/cmd/gocyclo@latest -top 5 -ignore '_test.go' .
-go run github.com/uudashr/gocognit/cmd/gocognit@latest -top 5 -ignore '_test.go' .
+golangci-lint run --config ../.golangci-complexity.yml ./...
 ```
 
 ## Usage
@@ -121,15 +120,11 @@ The three pre-existing routes (`add-policy-vehicle`, `add-policy-driver`, `add-p
 go test ./... -race -cover
 ```
 
-**Coverage** (`go test -race -coverpkg=./... -coverprofile=cover.out ./... && go tool cover -func=cover.out`): **98.2%** of statements module-wide. Every handler, `newMux`, `newServer`, `loadConfig`, `run`, and everything in `email/sendgrid` and `email/mockemail` is at **100%**.
+Every package is at 100% except `main`, where only `main()` itself (`log.Fatal(run(loadConfig(os.Getenv)))`) is uncovered. CI requires at least 90% per module.
 
-- `handlers/handlers_test.go` runs one shared table of cases (success, trimmed address, every row of the contract table above, and a provider failure via a small local `erroringMailProvider`, since `mockemail.Client` never fails on its own) against each of the four handlers, asserting on status, exact response body, the `Allow` header, and the recorded send. `TestAddPolicyCoverage` extends that table with the CC business rules: CC recorded on the send, per-index CC validation errors, trimming, case-insensitive de-duplication, dropping of the `To` address, and the fall-back to a plain send when the list empties. `TestSendErrorIsLoggedNotEchoed` pins that the provider's error text reaches the log and not the response.
-- `email/mockemail/mockemail_test.go` covers per-recipient logging, `Last()` on an empty log, flushing, snapshot semantics of `SendLogs()`/`Extract*`, and a `-race`-checked concurrent hammer.
-- `email/sendgrid/sendgrid_test.go` asserts recipients, sender, template and message land in the generated `V3Mail`, that zero `To` recipients are refused before the provider is called, and that provider errors are wrapped but still match with `errors.Is`.
-- `main_test.go` covers routing, mux-level rejections and 404s, `loadConfig` defaults/overrides, `newServer` timeouts and `run`'s listen failure.
-
-Two things are deliberately left uncovered:
-- `main()`'s single statement (`log.Fatal(run(loadConfig(os.Getenv)))`) — everything it calls is covered.
-- `mail.Personalization.AddBCCs` in the vendored `mail_v3.go` — BCC isn't part of this challenge's contract, and that file is marked "please do not modify".
-
-`gofmt -l .`, `go vet ./...`, `staticcheck ./...`, `golangci-lint run ./...` and the complexity lint above are all clean.
+- `handlers/handlers_test.go` runs one shared table of cases against all four handlers: success, trimmed addresses, every row of the contract table above, and a provider failure. `TestAddPolicyCoverage` adds the CC rules: CC recorded on the send, per-index validation errors, trimming, case-insensitive de-duplication, dropping the `To` address, and falling back to a plain send when the list ends up empty. `TestSendErrorIsLoggedNotEchoed` checks that provider errors are logged but not returned to the client.
+- `email/contract_test.go` runs the same `MailProvider` expectations against both `sendgrid` and `mockemail`, so the mock can't drift from the real provider.
+- `email/mockemail/mockemail_test.go` covers per-recipient logging, `Last()` on an empty log, flushing, snapshot semantics and concurrent use.
+- `email/sendgrid/sendgrid_test.go` checks recipients, sender, template and message in the generated `V3Mail`, rejection of zero `To` recipients, and error wrapping.
+- `email/sendgrid/mail/mail_v3_test.go` pins the behavior of the vendored stand-in that `sendgrid.Client` relies on, without modifying it.
+- `main_test.go` covers routing, rejections and 404s, `loadConfig`, `newServer`'s timeouts and `run`'s listen failure.

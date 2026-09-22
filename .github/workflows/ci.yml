@@ -73,9 +73,39 @@ jobs:
             exit 1
           fi
 
+      # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor,
+      # which Chromium's sandbox needs unless it has the setuid helper
+      # (the preinstalled google-chrome does; a go-rod-downloaded snapshot
+      # doesn't). Lift it so carrierproxy's real-browser tests can launch
+      # a sandboxed browser either way.
+      - name: Allow browser sandbox
+        if: matrix.module == 'carrierproxy'
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Test
         working-directory: ${{ matrix.module }}
-        run: go test ./... -race -cover
+        # Placeholder credentials the carrierproxy fixture site is told to
+        # accept, so its real-browser integration test runs in CI too
+        # (ubuntu-latest ships with Chrome); other modules ignore them.
+        env:
+          CARRIERPROXY_USERNAME: ci-user
+          CARRIERPROXY_PASSWORD: ci-pass
+        run: go test ./... -race -coverprofile=cover.out
+
+      - name: Enforce coverage
+        working-directory: ${{ matrix.module }}
+        env:
+          MIN_COVERAGE: "90"
+        run: |
+          total=$(go tool cover -func=cover.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
+          echo "Total coverage: ${total}% (minimum ${MIN_COVERAGE}%)"
+          awk -v t="$total" -v min="$MIN_COVERAGE" 'BEGIN { exit !(t >= min) }' || {
+            echo "Coverage ${total}% is below the ${MIN_COVERAGE}% minimum."
+            exit 1
+          }
 
   lint:
     name: Lint (${{ matrix.module }})
