@@ -1,5 +1,6 @@
 // Command comms runs the comms REST API. Each route accepts a JSON POST and
-// sends a templated email through sendgrid.
+// sends a templated email through sendgrid. See ../../README.md for the
+// challenge this module implements.
 package main
 
 import (
