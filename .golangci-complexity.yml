@@ -1,0 +1,20 @@
+version: "2"
+
+# Not auto-discovered (non-standard filename) — invoked explicitly via
+# --config by .github/workflows/complexity.yml.
+linters:
+  default: none
+  enable:
+    - gocyclo
+    - gocognit
+  settings:
+    gocyclo:
+      min-complexity: 6
+    gocognit:
+      min-complexity: 8
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gocognit
