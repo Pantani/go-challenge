@@ -1,11 +1,26 @@
 # go-challenge
 
-This repo is organized into multiple challenge exercises, each within it's own subdirectory.
+This repository contains four independent Go interview exercises:
+[carrierproxy](carrierproxy/README.md), [comms](comms/README.md),
+[filestore](filestore/README.md), and [notifier](notifier/README.md).
 
-Please follow the specific instructions for the challenge you have been assigned, and then submit your changes for code review based on the guidelines below.
+Each directory is its own Go module. Run a focused check from a module:
+
+```sh
+cd filestore
+go test -race ./...
+go vet ./...
+```
+
+From the repository root, `make check` runs formatting, module tidiness,
+build, vet, lint, complexity, and race-test checks. Carrierproxy's
+real-browser test reads `CARRIERPROXY_USERNAME` and `CARRIERPROXY_PASSWORD`
+and, by default, logs into a local fixture site, so it needs no external
+account; `CARRIERPROXY_LOGIN_URL` points it at a real site instead.
 
 ## General Submission Guidelines
 
-* [ ] Fork this repository and make your changes directly within the appropriate challenge directory.
-* [ ] When complete, send in a pull request for code review.
-* [ ] Ensure that before you send the PR that the main application compiles and runs, the tests all pass, and your commits are all squashed into a single commit.
+* [ ] Fork this repository and make changes in the assigned challenge directory.
+* [ ] Submit a pull request for code review.
+* [ ] Before submission, ensure the relevant application compiles, tests pass,
+  and commits are squashed into one commit.

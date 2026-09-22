@@ -4,3 +4,6 @@ CLAUDE.md
 .claude/
 .idea/
 _workspace/
+cover.out
+.cache/
+/docs/
