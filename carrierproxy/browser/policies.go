@@ -23,13 +23,9 @@ func (c *Client) Policies() ([]carrierproxy.Policy, error) {
 		return nil, err
 	}
 
-	var policies []carrierproxy.Policy
-	err = c.withRetries(func() error {
-		var attemptErr error
-		policies, attemptErr = c.scrapePolicies(creds)
-		return attemptErr
+	return attemptWithRetries(c, func() ([]carrierproxy.Policy, error) {
+		return c.scrapePolicies(creds)
 	})
-	return policies, err
 }
 
 // scrapePolicies is a single Policies attempt: re-authenticate, navigate

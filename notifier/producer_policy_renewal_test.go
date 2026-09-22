@@ -11,10 +11,11 @@ import (
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email/mockemail"
 )
 
-func assertEqual(t *testing.T, label string, want, got any) {
-	t.Helper()
-	if want != got {
-		t.Fatalf("expected %s %v, got %v", label, want, got)
+func validPolicyRenewalInput() notifier.PolicyRenewalInput {
+	return notifier.PolicyRenewalInput{
+		Recipient:    "user@example.com",
+		PolicyNumber: "POL-123",
+		RenewalDate:  time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -22,12 +23,7 @@ func TestNotifyPolicyRenewal(t *testing.T) {
 	mail := mockemail.NewClient()
 	producer := notifier.NewProducer(mail)
 
-	renewalDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
-	err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, notifier.PolicyRenewalInput{
-		Recipient:    "user@example.com",
-		PolicyNumber: "POL-123",
-		RenewalDate:  renewalDate,
-	})
+	err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, validPolicyRenewalInput())
 	if err != nil {
 		t.Fatalf("notify policy renewal: %v", err)
 	}
@@ -79,9 +75,6 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 			mail := mockemail.NewClient()
 
 			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, tc.input)
-			if err == nil {
-				t.Fatalf("expected error for %s", name)
-			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
