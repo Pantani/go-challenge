@@ -84,6 +84,27 @@ func TestClientPolicies(t *testing.T) {
 		}
 	})
 
+	t.Run("exhausts retries and returns the last error with no policies", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithPoliciesURL(testPoliciesURL), WithRetries(2))
+		c.sleep = func(time.Duration) {}
+		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
+		wantErr := errors.New("persistent")
+		calls := 0
+		c.newPage = func(time.Duration) (page, func(), error) { calls++; return nil, nil, wantErr }
+
+		got, err := c.Policies()
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+		if got != nil {
+			t.Fatalf("expected no policies on failure, got %+v", got)
+		}
+		if calls != 3 {
+			t.Fatalf("expected 3 attempts, got %d", calls)
+		}
+	})
+
 	t.Run("never retries a malformed row", func(t *testing.T) {
 		t.Parallel()
 		c := NewClient(testLoginURL, WithPoliciesURL(testPoliciesURL), WithRetries(2))

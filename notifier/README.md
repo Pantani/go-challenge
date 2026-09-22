@@ -18,30 +18,36 @@ Glovebox needs to notify policyholders when a policy renewal is approaching. Add
 
 ```
 notifier/
-├── cmd/notifier/main.go              # demo binary (package main)
-├── producer.go                        # Producer, ProducerProvider, TopicRequestBuilder, Request
-├── producer_doc_upload.go              # TopicDocumentUpload + its topic builder
-├── producer_otp_login.go                # TopicOTPLogin + its topic builder
-├── producer_policy_renewal.go            # TopicPolicyRenewal + its topic builder
-├── producer_test.go                       # Producer + doc-upload tests (package notifier_test)
-├── producer_otp_login_test.go              # otp-login tests
-├── producer_policy_renewal_test.go          # policy-renewal tests
+├── cmd/notifier/
+│   ├── main.go                        # demo binary (package main): main() + testable run()
+│   └── main_test.go
+├── producer.go                        # Producer, ProducerProvider, TopicRequestBuilder, Request,
+│                                      # defaultTopicBuilders() and the generic topicBuilder[T] skeleton
+├── errors.go                          # sentinel errors (errors.Is-able) for the producer and each topic
+├── producer_doc_upload.go             # TopicDocumentUpload + its topic builder
+├── producer_otp_login.go              # TopicOTPLogin + its topic builder
+├── producer_policy_renewal.go         # TopicPolicyRenewal + its topic builder
+├── producer_test.go                   # Producer + doc-upload tests (package notifier_test)
+├── producer_otp_login_test.go         # otp-login tests
+├── producer_policy_renewal_test.go    # policy-renewal tests
 └── channels/
-    └── email/                 # the MailProvider contract and its implementations
-        ├── email.go             # MailProvider interface, TplID, template constants
-        ├── sendgrid/             # real implementation
-        └── mockemail/             # in-memory implementation used by the demo and tests
+    └── email/                         # the MailProvider contract and its implementations
+        ├── email.go                   # MailProvider interface, TplID, template constants, RequireRecipient
+        ├── sendgrid/                  # real implementation (network call stubbed; request validation real)
+        └── mockemail/                 # thread-safe in-memory implementation used by the demo and tests
 ```
 
 The root `notifier` package holds the producer's orchestration logic (`Producer`, routing by topic) and one file per notification topic builder. `channels/email` is the delivery mechanism the producer depends on, following the same interface-plus-implementations shape as `comms/email`. `cmd/notifier` holds only the demo entrypoint.
 
 ## Implementation
 
-The policy renewal reminder is added as a new topic, following the same shape as the existing topic builders: one file per topic, defining a `Topic...` constant, an `...Input` struct, and a `...TopicBuilder` with `Topic()`/`BuildRequest()`, registered in `NewProducer`.
+The policy renewal reminder is added as a new topic, following the same shape as the existing topic builders: one file per topic, defining a `Topic...` constant, an `...Input` struct, and a `...TopicBuilder` value built from the shared generic `topicBuilder[T]` in `producer.go`, which handles the input type assertion and `Request` assembly so each topic only supplies its validation and template variables. Every builder is listed once in `defaultTopicBuilders()`, which `NewProducer` uses to populate the topic map; adding a topic means adding one file and one line there.
 
 * `TopicPolicyRenewal` — the topic key.
 * `PolicyRenewalInput{Recipient, PolicyNumber, RenewalDate}` — the typed input. All three fields are required; `RenewalDate` must be a non-zero `time.Time`.
 * `policyRenewalTopicBuilder` — validates the input and builds the email `Request`, passing `policyNumber` and a formatted `renewalDate` (`YYYY-MM-DD`) as template variables.
+
+Every validation failure maps to a sentinel in `errors.go` (`ErrInvalidPolicyRenewalInput`, `ErrPolicyRenewalMissingRecipient`, ...) so callers can branch with `errors.Is`. `Producer.Notify` additionally refuses to send once the context is done, when any recipient is blank (`ErrMissingRecipients`), or when the request names no template (`ErrMissingTemplate`).
 
 ### Usage
 
@@ -62,4 +68,12 @@ err := producer.NotifyTopic(ctx, notifier.TopicPolicyRenewal, notifier.PolicyRen
 go test ./... -v -cover
 ```
 
-`notifier`, `channels/email`, `channels/email/mockemail`, and `channels/email/sendgrid` are all at **100%** statement coverage. `cmd/notifier` sits at 62.5%: `TestRun` exercises the demo end to end, and only the `main()` wrapper's `log.Fatal` path — reached solely by a `run()` failure that can't happen against the in-memory mock — is left uncovered, the same pattern `filestore/cmd/filestore` uses.
+`notifier`, `channels/email`, `channels/email/mockemail`, and `channels/email/sendgrid` are all at **100%** statement coverage. `cmd/notifier` sits at 69.2%: the `run(ctx, mail)` tests exercise the demo end to end (success, provider failure via `mockemail.Client.SetSendError`, and a cancelled context), and only the `main()` wrapper's `log.Fatal` path is left uncovered, the same pattern `filestore/cmd/filestore` uses. Across the module (`-coverpkg=./...`) that is **96.1%**.
+
+### Running the demo
+
+```bash
+go run ./cmd/notifier
+```
+
+It sends one example notification per registered topic through the in-memory mock and logs how many were recorded.
