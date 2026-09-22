@@ -4,3 +4,4 @@ CLAUDE.md
 .claude/
 .idea/
 _workspace/
+.cache/
