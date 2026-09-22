@@ -2,7 +2,6 @@ package notifier
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 )
@@ -23,16 +22,16 @@ func (otpLoginTopicBuilder) BuildRequest(_ context.Context, input any) (Request,
 
 	typedInput, ok := input.(OTPLoginInput)
 	if !ok {
-		return Request{}, fmt.Errorf("invalid otp login input type")
+		return Request{}, ErrInvalidOTPLoginInput
 	}
 	if typedInput.Recipient == "" {
-		return Request{}, fmt.Errorf("otp login requires recipient")
+		return Request{}, ErrOTPLoginMissingRecipient
 	}
 	if typedInput.OTPCode == "" {
-		return Request{}, fmt.Errorf("otp login requires otp code")
+		return Request{}, ErrOTPLoginMissingCode
 	}
 	if typedInput.ExpirationMins <= 0 {
-		return Request{}, fmt.Errorf("otp login requires valid expiration minutes")
+		return Request{}, ErrOTPLoginInvalidExpiration
 	}
 	return Request{
 		Topic:      TopicOTPLogin,

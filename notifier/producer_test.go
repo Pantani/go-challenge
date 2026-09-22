@@ -2,6 +2,7 @@ package notifier_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier"
@@ -32,35 +33,79 @@ func TestNotifyDocumentUpload(t *testing.T) {
 	if last.Tpl != email.TplDocumentUpload {
 		t.Fatalf("expected template %q, got %q", email.TplDocumentUpload, last.Tpl)
 	}
+	if last.Vars["document"] != "policy.pdf" {
+		t.Fatalf("expected document var %q, got %v", "policy.pdf", last.Vars["document"])
+	}
 }
 
 func TestNotifyUnknownTopic(t *testing.T) {
-	err := notifier.NewProducer(mockemail.NewClient()).NotifyTopic(context.Background(), "unknown", nil)
+	mail := mockemail.NewClient()
+
+	err := notifier.NewProducer(mail).NotifyTopic(context.Background(), "unknown", nil)
 	if err == nil {
 		t.Fatal("expected unknown topic error")
 	}
+	if !errors.Is(err, notifier.ErrTopicNotRegistered) {
+		t.Fatalf("expected ErrTopicNotRegistered, got %q", err.Error())
+	}
+	if !mail.SendLogs().IsEmpty() {
+		t.Fatal("expected no email to be sent for an unknown topic")
+	}
 }
 
+// A bare err==nil check can't tell "the right validation fired" from "some
+// other validation fired instead" -- it only proves *a* branch returned an
+// error, not *which* branch. errors.Is against the specific sentinel (and
+// checking that nothing was sent) ties each case to the exact check it
+// claims to exercise, without coupling the test to message wording.
 func TestNotifyDocumentUploadInvalidInput(t *testing.T) {
-	tests := map[string]any{
-		"wrong input type":  "not-a-document-upload-input",
-		"missing recipient": notifier.DocumentUploadInput{Document: "policy.pdf"},
-		"missing document":  notifier.DocumentUploadInput{Recipient: "user@example.com"},
+	testCases := map[string]struct {
+		input   any
+		wantErr error
+	}{
+		"wrong input type": {
+			input:   "not-a-document-upload-input",
+			wantErr: notifier.ErrInvalidDocumentUploadInput,
+		},
+		"missing recipient": {
+			input:   notifier.DocumentUploadInput{Document: "policy.pdf"},
+			wantErr: notifier.ErrDocumentUploadMissingRecipient,
+		},
+		"missing document": {
+			input:   notifier.DocumentUploadInput{Recipient: "user@example.com"},
+			wantErr: notifier.ErrDocumentUploadMissingDocument,
+		},
 	}
 
-	for name, input := range tests {
+	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			producer := notifier.NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), notifier.TopicDocumentUpload, input); err == nil {
+			mail := mockemail.NewClient()
+
+			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicDocumentUpload, tc.input)
+			if err == nil {
 				t.Fatalf("expected error for %s", name)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+			if !mail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))
 			}
 		})
 	}
 }
 
 func TestNotifyRequiresRecipient(t *testing.T) {
-	err := notifier.NewProducer(mockemail.NewClient()).Notify(context.Background(), notifier.Request{})
+	mail := mockemail.NewClient()
+
+	err := notifier.NewProducer(mail).Notify(context.Background(), notifier.Request{})
 	if err == nil {
 		t.Fatal("expected error for empty recipients")
+	}
+	if !errors.Is(err, notifier.ErrMissingRecipients) {
+		t.Fatalf("expected ErrMissingRecipients, got %v", err)
+	}
+	if !mail.SendLogs().IsEmpty() {
+		t.Fatal("expected no email to be sent")
 	}
 }

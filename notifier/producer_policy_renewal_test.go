@@ -2,6 +2,7 @@ package notifier_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -45,18 +46,47 @@ func TestNotifyPolicyRenewal(t *testing.T) {
 func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 	validDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
-	tests := map[string]any{
-		"wrong input type":      "not-a-policy-renewal-input",
-		"missing recipient":     notifier.PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
-		"missing policy number": notifier.PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
-		"missing renewal date":  notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+	testCases := map[string]struct {
+		input   any
+		wantErr error
+	}{
+		"wrong input type": {
+			input:   "not-a-policy-renewal-input",
+			wantErr: notifier.ErrInvalidPolicyRenewalInput,
+		},
+		"missing recipient": {
+			input:   notifier.PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingRecipient,
+		},
+		"missing policy number": {
+			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingPolicyNumber,
+		},
+		"missing renewal date": {
+			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+			wantErr: notifier.ErrPolicyRenewalMissingRenewalDate,
+		},
 	}
 
-	for name, input := range tests {
+	// A bare err==nil check can't tell "the right validation fired" from
+	// "some other validation fired instead" -- it only proves *a* branch
+	// returned an error, not *which* branch. errors.Is against the specific
+	// sentinel (and checking that nothing was sent) ties each case to the
+	// exact check it claims to exercise, without coupling the test to
+	// message wording.
+	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			producer := notifier.NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, input); err == nil {
+			mail := mockemail.NewClient()
+
+			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, tc.input)
+			if err == nil {
 				t.Fatalf("expected error for %s", name)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+			if !mail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))
 			}
 		})
 	}
