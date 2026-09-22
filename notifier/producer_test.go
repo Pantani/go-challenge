@@ -39,3 +39,27 @@ func TestNotifyUnknownTopic(t *testing.T) {
 		t.Fatal("expected unknown topic error")
 	}
 }
+
+func TestNotifyDocumentUploadInvalidInput(t *testing.T) {
+	tests := map[string]any{
+		"wrong input type":  "not-a-document-upload-input",
+		"missing recipient": DocumentUploadInput{Document: "policy.pdf"},
+		"missing document":  DocumentUploadInput{Recipient: "user@example.com"},
+	}
+
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			producer := NewProducer(mockemail.NewClient())
+			if err := producer.NotifyTopic(context.Background(), TopicDocumentUpload, input); err == nil {
+				t.Fatalf("expected error for %s", name)
+			}
+		})
+	}
+}
+
+func TestNotifyRequiresRecipient(t *testing.T) {
+	err := NewProducer(mockemail.NewClient()).Notify(context.Background(), Request{})
+	if err == nil {
+		t.Fatal("expected error for empty recipients")
+	}
+}

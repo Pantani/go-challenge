@@ -7,6 +7,7 @@ type TplID string
 const (
 	TplDocumentUpload TplID = "new-document"
 	TplOTPLogin       TplID = "otp-login"
+	TplPolicyRenewal  TplID = "policy-renewal"
 )
 
 type MailProvider interface {
