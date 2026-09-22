@@ -26,6 +26,11 @@ var _ filestore.PresignedFileProvider = (*Client)(nil)
 // ErrNoSuchKey; the Client maps it onto filestore.ErrNotFound.
 var ErrNoSuchKey = errors.New("no such key")
 
+// ErrNoAPI is returned by write operations when no ObjectAPI was configured,
+// so a missing or mis-wired adapter surfaces at the first Set instead of
+// silently discarding data.
+var ErrNoAPI = errors.New("no object API configured")
+
 // ObjectAPI is the subset of the S3 object API the Client relies on.
 //
 // Every method operates on a single bucket. Methods that address an existing
@@ -164,7 +169,7 @@ func opErr(op, filename string, err error) error {
 }
 
 // emptyAPI is the ObjectAPI used when none is configured: a bucket that is
-// always empty and silently discards writes.
+// always empty and rejects writes with ErrNoAPI.
 type emptyAPI struct{}
 
 func (emptyAPI) HeadObject(context.Context, string, string) error { return ErrNoSuchKey }
@@ -173,7 +178,9 @@ func (emptyAPI) GetObject(context.Context, string, string) (io.ReadCloser, strin
 	return nil, "", ErrNoSuchKey
 }
 
-func (emptyAPI) PutObject(context.Context, string, string, io.Reader, string) error { return nil }
+func (emptyAPI) PutObject(context.Context, string, string, io.Reader, string) error {
+	return ErrNoAPI
+}
 
 func (emptyAPI) CopyObject(context.Context, string, string, string) error { return ErrNoSuchKey }
 

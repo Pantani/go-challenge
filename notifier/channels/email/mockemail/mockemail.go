@@ -3,6 +3,7 @@
 package mockemail
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
@@ -39,7 +40,7 @@ func (c *Client) Send(to []string, tpl email.TplID, vars map[string]any) error {
 		return c.sendErr
 	}
 	for _, recipient := range to {
-		c.sendLogs = append(c.sendLogs, SendLog{To: recipient, Tpl: tpl, Vars: vars})
+		c.sendLogs = append(c.sendLogs, SendLog{To: recipient, Tpl: tpl, Vars: maps.Clone(vars)})
 	}
 	return nil
 }
@@ -50,7 +51,10 @@ func (c *Client) SendLogs() SendLogs {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make(SendLogs, len(c.sendLogs))
-	copy(out, c.sendLogs)
+	for i, l := range c.sendLogs {
+		out[i] = l
+		out[i].Vars = maps.Clone(l.Vars)
+	}
 	return out
 }
 

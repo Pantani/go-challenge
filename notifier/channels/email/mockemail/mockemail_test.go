@@ -132,6 +132,20 @@ func TestClientSendLogsIsSnapshot(t *testing.T) {
 	assertEqual(t, "snapshot length after later send and flush", 1, len(snapshot))
 }
 
+func TestClientSendLogsClonesVars(t *testing.T) {
+	client := mockemail.NewClient()
+	vars := map[string]any{"otpCode": "1234"}
+	if err := client.Send([]string{"first@example.com"}, email.TplOTPLogin, vars); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	vars["otpCode"] = "caller-mutated"
+	assertEqual(t, "var after caller mutation", "1234", client.SendLogs()[0].Vars["otpCode"])
+
+	client.SendLogs()[0].Vars["otpCode"] = "snapshot-mutated"
+	assertEqual(t, "var after snapshot mutation", "1234", client.SendLogs()[0].Vars["otpCode"])
+}
+
 func TestClientConcurrentUse(t *testing.T) {
 	const workers, sendsPerWorker = 8, 50
 	client := mockemail.NewClient()

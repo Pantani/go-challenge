@@ -165,8 +165,8 @@ func TestDefaultAPIIsAnEmptyBucket(t *testing.T) {
 	ctx := context.Background()
 	client := NewClient(Config{Bucket: "b"})
 
-	if err := client.Set(ctx, "a", []byte("x"), "text/plain"); err != nil {
-		t.Fatalf("Set: %v", err)
+	if err := client.Set(ctx, "a", []byte("x"), "text/plain"); !errors.Is(err, ErrNoAPI) {
+		t.Fatalf("Set error = %v, want ErrNoAPI", err)
 	}
 	if err := client.Purge(ctx, "a"); err != nil {
 		t.Fatalf("Purge: %v", err)
@@ -209,8 +209,8 @@ func TestEmptyAPI(t *testing.T) {
 			t.Errorf("%s error = %v, want ErrNoSuchKey", name, err)
 		}
 	}
-	if err := api.PutObject(ctx, "b", "k", strings.NewReader("x"), ""); err != nil {
-		t.Errorf("PutObject error = %v", err)
+	if err := api.PutObject(ctx, "b", "k", strings.NewReader("x"), ""); !errors.Is(err, ErrNoAPI) {
+		t.Errorf("PutObject error = %v, want ErrNoAPI", err)
 	}
 	if err := api.DeleteObject(ctx, "b", "k"); err != nil {
 		t.Errorf("DeleteObject error = %v", err)

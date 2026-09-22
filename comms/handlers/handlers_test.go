@@ -109,6 +109,12 @@ func commonCases() map[string]handlerCase {
 			expectStatus: http.StatusRequestEntityTooLarge,
 			expectBody:   "request body too large\n",
 		},
+		"fail oversized trailing data": {
+			method:       http.MethodPost,
+			body:         validBody + strings.Repeat(" ", 1<<20),
+			expectStatus: http.StatusRequestEntityTooLarge,
+			expectBody:   "request body too large\n",
+		},
 		"fail missing email_to": {
 			method:       http.MethodPost,
 			body:         `{"message":{"foo":"bar"}}`,

@@ -16,6 +16,24 @@ import (
 )
 
 // readFile returns the contents and content type of filename.
+// tryReadFile is readFile for goroutines: it reports failures through the
+// returned error instead of stopping the calling goroutine.
+func tryReadFile(client *mock.Client, filename string) (string, error) {
+	rc, _, err := client.Get(context.Background(), filename)
+	if err != nil {
+		return "", fmt.Errorf("getting %q: %w", filename, err)
+	}
+	content, readErr := io.ReadAll(rc)
+	closeErr := rc.Close()
+	if readErr != nil {
+		return "", fmt.Errorf("reading %q: %w", filename, readErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("closing %q: %w", filename, closeErr)
+	}
+	return string(content), nil
+}
+
 func readFile(t *testing.T, client *mock.Client, filename string) (string, string) {
 	t.Helper()
 
@@ -158,7 +176,9 @@ func TestConcurrentAccess(t *testing.T) {
 				if err := client.Set(ctx, name, []byte(name), "text/plain"); err != nil {
 					t.Error(err)
 				}
-				if got, _ := readFile(t, client, name); got != name {
+				if got, err := tryReadFile(client, name); err != nil {
+					t.Error(err)
+				} else if got != name {
 					t.Errorf("got %q, want %q", got, name)
 				}
 				if err := client.Copy(ctx, name, copyName); err != nil {

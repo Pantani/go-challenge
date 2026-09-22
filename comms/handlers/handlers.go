@@ -120,10 +120,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) *httpError {
 	}
 
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return &httpError{status: http.StatusBadRequest, msg: "invalid payload: unexpected data after JSON value"}
+		return trailingDataError(err)
 	}
 
 	return nil
+}
+
+// trailingDataError classifies a failure to reach EOF after the first JSON
+// value: an oversized body is still 413, anything else is trailing data.
+func trailingDataError(err error) *httpError {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return decodeError(err)
+	}
+	return &httpError{status: http.StatusBadRequest, msg: "invalid payload: unexpected data after JSON value"}
 }
 
 // decodeError translates a JSON decode failure into the client-facing error.
