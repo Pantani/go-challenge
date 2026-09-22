@@ -44,10 +44,16 @@ type cookie struct {
 
 // launchPage starts a headless browser, opens a blank page on it bounded
 // by timeout, and returns it as a page along with a func that releases the
-// browser. It is the only function in this package that talks to go-rod
-// directly.
+// browser. Together with launchPageWith, it is the only code in this
+// package that talks to go-rod directly.
 func launchPage(timeout time.Duration) (page, func(), error) {
-	l := launcher.New().Headless(true)
+	return launchPageWith(launcher.New().Headless(true), timeout)
+}
+
+// launchPageWith is launchPage against a caller-built launcher, so tests
+// can point it at a binary that fails in a specific way and exercise the
+// cleanup paths without a real browser.
+func launchPageWith(l *launcher.Launcher, timeout time.Duration) (page, func(), error) {
 	controlURL, err := l.Launch()
 	if err != nil {
 		// Launch can fail after it has already started the browser

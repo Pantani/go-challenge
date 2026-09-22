@@ -15,19 +15,21 @@ import (
 const demoLoginURL = "https://the-internet.herokuapp.com/login"
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(demoLoginURL, os.Getenv); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// run wires up a browser.Client and performs one login, returning any
-// failure for main to report; kept separate from main so the only os.Exit
-// path in this program is the one in main itself.
-func run() error {
-	username := os.Getenv("CARRIERPROXY_USERNAME")
-	password := os.Getenv("CARRIERPROXY_PASSWORD")
+// run wires up a browser.Client against loginURL and performs one login
+// with the credentials getenv returns, returning any failure for main to
+// report; kept separate from main so the only os.Exit path in this program
+// is the one in main itself, and parameterized so tests can point it at a
+// local site instead of the public demo.
+func run(loginURL string, getenv func(string) string) error {
+	username := getenv("CARRIERPROXY_USERNAME")
+	password := getenv("CARRIERPROXY_PASSWORD")
 
-	client := browser.NewClient(demoLoginURL)
+	client := browser.NewClient(loginURL)
 	if err := client.Login(username, password); err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}

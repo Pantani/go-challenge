@@ -153,11 +153,14 @@ Chrome/Chromium isn't required to be pre-installed: go-rod downloads a matching 
 go test ./...
 ```
 
-This runs every test except the real-browser integration test, which is skipped unless credentials are supplied (see below) — so the default run is fast (~1.5s for 112 test cases) and needs no network access or browser.
+This runs every test except the real-browser integration test, which is skipped unless credentials are supplied (see below). No network access is needed, and no browser is required either: the tests that do need one (see below) skip themselves when `launcher.LookPath()` finds no local Chrome/Chromium, so the default run never downloads a browser.
 
-**Coverage** (`go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`): every function in `browser/login.go`, `browser/policies.go`, `browser/documents.go`, `browser/session.go`, `browser/options.go`, `browser/client.go` and `browser/http.go` (the actual challenge logic) is at **100%**. The only uncovered lines by default are `cmd/carrierproxy/main.go` (a thin CLI wrapper, conventionally untested — see `notifier/main.go` for the same pattern elsewhere in this repo) and the go-rod adapter in `browser/rod.go`, which needs a real browser to exercise.
+**Coverage** (`go test ./... -coverprofile=cover.out && go tool cover -func=cover.out`): every function in `browser/login.go`, `browser/policies.go`, `browser/documents.go`, `browser/session.go`, `browser/options.go`, `browser/client.go` and `browser/http.go` (the actual challenge logic) is at **100%**, and the module is at ~97% overall when a local Chrome is present. CI enforces a 90% minimum per module (`.github/workflows/ci.yml`). The go-rod adapter and the CLI are covered by:
 
-To cover that adapter too, and to fulfil "test(s) ... that accept environment variables for the credentials": set `CARRIERPROXY_USERNAME`/`CARRIERPROXY_PASSWORD` and run the suite again (91% overall with this included — the remaining gap is `main()`/`run()` and a few defensive branches in the go-rod adapter, e.g. cleanup after an already-failed launch, that a successful run has no reason to hit):
+* `browser/rod_test.go` — `TestLaunchPageWithFailedLaunch` points `launchPageWith` at a missing binary and at one that exits without a DevTools URL, covering both launch-failure cleanup paths with no browser at all. `TestRodAdapter` and `TestRodAdapterErrors` drive every `rodPage`/`rodElement` method against a real headless Chrome and a local page, including the error each one returns once the page's timeout expires.
+* `cmd/carrierproxy/main_test.go` — `run` takes the login URL and a `getenv` func, so `TestRunEndToEnd` runs the CLI's code path end to end through a real browser against a local login page, and `TestRunMissingCredentials` covers the blank-credentials path without one. Only `main()` itself stays uncovered.
+
+To fulfil "test(s) ... that accept environment variables for the credentials", set `CARRIERPROXY_USERNAME`/`CARRIERPROXY_PASSWORD` to also run the integration test (CI sets placeholder values for this):
 
 ```bash
 CARRIERPROXY_USERNAME=testuser CARRIERPROXY_PASSWORD=testpass go test ./... -v -run TestLoginIntegration

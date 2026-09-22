@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
@@ -37,14 +38,28 @@ func newMux(emailsvc email.MailProvider) *http.ServeMux {
 
 func main() {
 
-	// initialize the email service
-	emailsvc := sendgrid.NewSvc(sendgrid.Config{
+	// start the api server
+	ln, err := net.Listen("tcp", ":8090")
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print("starting server...")
+	log.Fatal(serve(ln, newEmailSvc()))
+}
+
+// newEmailSvc initializes the sendgrid-backed email service from the app
+// config.
+func newEmailSvc() *sendgrid.Client {
+	return sendgrid.NewSvc(sendgrid.Config{
 		APIKey:      cfgEmailAPIKey,
 		FromName:    cfgEmailFromName,
 		FromAddress: cfgEmailFromAddress,
 	})
+}
 
-	// start the api server
-	log.Print("starting server...")
-	log.Fatal(http.ListenAndServe(":8090", newMux(emailsvc)))
+// serve runs the comms API on ln until ln is closed or the server fails,
+// always returning a non-nil error. It takes a listener rather than an
+// address so the end-to-end test can bind an ephemeral port.
+func serve(ln net.Listener, emailsvc email.MailProvider) error {
+	return http.Serve(ln, newMux(emailsvc))
 }
