@@ -48,7 +48,7 @@ type handlerCase struct {
 	sendErr      error
 	expectStatus int
 	expectBody   string // exact response body, including an empty success body
-	expectTo     string // recorded To recipient on a 200
+	expectTo     string // recorded To recipient whenever delivery is attempted
 	expectCC     []string
 	expectMsg    string
 }
@@ -157,6 +157,8 @@ func commonCases() map[string]handlerCase {
 			sendErr:      errors.New("secret provider detail"),
 			expectStatus: http.StatusInternalServerError,
 			expectBody:   "error sending email\n",
+			expectTo:     "foo@bar.com",
+			expectMsg:    `{"foo":"bar"}`,
 		},
 	}
 }
@@ -206,11 +208,8 @@ func assertHandlerResponse(t *testing.T, w *httptest.ResponseRecorder, tc handle
 
 func assertHandlerDelivery(t *testing.T, p *deliverySpy, tpl email.TplID, tc handlerCase) {
 	t.Helper()
-	if tc.sendErr != nil {
-		assertEqual(t, "attempts", len(p.send)+len(p.sendCC), 1)
-		return
-	}
-	if tc.expectStatus != http.StatusOK {
+	// A provider error still means exactly one, correctly shaped, attempt.
+	if tc.expectStatus != http.StatusOK && tc.sendErr == nil {
 		assertEqual(t, "attempts", len(p.send)+len(p.sendCC), 0)
 		return
 	}
@@ -346,6 +345,9 @@ func TestAddPolicyCoverage(t *testing.T) {
 		sendErr:      errors.New("secret provider detail"),
 		expectStatus: http.StatusInternalServerError,
 		expectBody:   "error sending email\n",
+		expectTo:     "foo@bar.com",
+		expectCC:     []string{"cc@bar.com"},
+		expectMsg:    `{"foo":"bar"}`,
 	}
 
 	runHandlerCases(t, handlers.AddPolicyCoverage, email.TplAddPolicyCoverage, cases)

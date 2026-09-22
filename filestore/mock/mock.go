@@ -16,7 +16,10 @@ var _ filestore.PresignedFileProvider = (*Client)(nil)
 
 // Bucket is the in-memory object store backing a Client.
 type Bucket struct {
-	Name    string
+	// Name identifies the bucket; the mock does not otherwise use it.
+	Name string
+	// Objects holds the stored files by object key (see Client.key). A nil
+	// map is allocated by NewClient.
 	Objects map[string]*MemoryFile
 }
 
