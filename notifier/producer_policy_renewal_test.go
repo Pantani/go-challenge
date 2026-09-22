@@ -44,18 +44,46 @@ func TestNotifyPolicyRenewal(t *testing.T) {
 func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 	validDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
-	tests := map[string]any{
-		"wrong input type":      "not-a-policy-renewal-input",
-		"missing recipient":     PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
-		"missing policy number": PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
-		"missing renewal date":  PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+	testCases := map[string]struct {
+		input     any
+		wantError string
+	}{
+		"wrong input type": {
+			input:     "not-a-policy-renewal-input",
+			wantError: "invalid policy renewal input type",
+		},
+		"missing recipient": {
+			input:     PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
+			wantError: "policy renewal requires recipient",
+		},
+		"missing policy number": {
+			input:     PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
+			wantError: "policy renewal requires policy number",
+		},
+		"missing renewal date": {
+			input:     PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+			wantError: "policy renewal requires renewal date",
+		},
 	}
 
-	for name, input := range tests {
+	// A bare err==nil check can't tell "the right validation fired" from
+	// "some other validation fired instead" -- it only proves *a* branch
+	// returned an error, not *which* branch. Pinning the exact message
+	// (and that nothing was sent) is what actually ties each case to the
+	// specific check it claims to exercise.
+	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			producer := NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), TopicPolicyRenewal, input); err == nil {
+			mail := mockemail.NewClient()
+
+			err := NewProducer(mail).NotifyTopic(context.Background(), TopicPolicyRenewal, tc.input)
+			if err == nil {
 				t.Fatalf("expected error for %s", name)
+			}
+			if err.Error() != tc.wantError {
+				t.Fatalf("expected error %q, got %q", tc.wantError, err.Error())
+			}
+			if !mail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))
 			}
 		})
 	}

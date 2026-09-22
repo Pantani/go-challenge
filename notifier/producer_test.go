@@ -31,35 +31,79 @@ func TestNotifyDocumentUpload(t *testing.T) {
 	if last.Tpl != email.TplDocumentUpload {
 		t.Fatalf("expected template %q, got %q", email.TplDocumentUpload, last.Tpl)
 	}
+	if last.Vars["document"] != "policy.pdf" {
+		t.Fatalf("expected document var %q, got %v", "policy.pdf", last.Vars["document"])
+	}
 }
 
 func TestNotifyUnknownTopic(t *testing.T) {
-	err := NewProducer(mockemail.NewClient()).NotifyTopic(context.Background(), "unknown", nil)
+	mail := mockemail.NewClient()
+
+	err := NewProducer(mail).NotifyTopic(context.Background(), "unknown", nil)
 	if err == nil {
 		t.Fatal("expected unknown topic error")
 	}
+	wantErr := "topic builder not registered: unknown"
+	if err.Error() != wantErr {
+		t.Fatalf("expected error %q, got %q", wantErr, err.Error())
+	}
+	if !mail.SendLogs().IsEmpty() {
+		t.Fatal("expected no email to be sent for an unknown topic")
+	}
 }
 
+// A bare err==nil check can't tell "the right validation fired" from "some
+// other validation fired instead" -- it only proves *a* branch returned an
+// error, not *which* branch. Pinning the exact message (and that nothing
+// was sent) ties each case to the specific check it claims to exercise.
 func TestNotifyDocumentUploadInvalidInput(t *testing.T) {
-	tests := map[string]any{
-		"wrong input type":  "not-a-document-upload-input",
-		"missing recipient": DocumentUploadInput{Document: "policy.pdf"},
-		"missing document":  DocumentUploadInput{Recipient: "user@example.com"},
+	testCases := map[string]struct {
+		input     any
+		wantError string
+	}{
+		"wrong input type": {
+			input:     "not-a-document-upload-input",
+			wantError: "invalid document upload input type",
+		},
+		"missing recipient": {
+			input:     DocumentUploadInput{Document: "policy.pdf"},
+			wantError: "document upload requires recipient",
+		},
+		"missing document": {
+			input:     DocumentUploadInput{Recipient: "user@example.com"},
+			wantError: "document upload requires document",
+		},
 	}
 
-	for name, input := range tests {
+	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			producer := NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), TopicDocumentUpload, input); err == nil {
+			mail := mockemail.NewClient()
+
+			err := NewProducer(mail).NotifyTopic(context.Background(), TopicDocumentUpload, tc.input)
+			if err == nil {
 				t.Fatalf("expected error for %s", name)
+			}
+			if err.Error() != tc.wantError {
+				t.Fatalf("expected error %q, got %q", tc.wantError, err.Error())
+			}
+			if !mail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))
 			}
 		})
 	}
 }
 
 func TestNotifyRequiresRecipient(t *testing.T) {
-	err := NewProducer(mockemail.NewClient()).Notify(context.Background(), Request{})
+	mail := mockemail.NewClient()
+
+	err := NewProducer(mail).Notify(context.Background(), Request{})
 	if err == nil {
 		t.Fatal("expected error for empty recipients")
+	}
+	if err.Error() != "notification requires recipient" {
+		t.Fatalf("expected recipient error, got %q", err.Error())
+	}
+	if !mail.SendLogs().IsEmpty() {
+		t.Fatal("expected no email to be sent")
 	}
 }
