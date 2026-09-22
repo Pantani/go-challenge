@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/sendgrid"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/handlers"
 )
@@ -22,6 +23,18 @@ func init() {
 	cfgEmailFromAddress = "foo@bar.com"
 }
 
+// newMux builds the comms API's route table against the given email
+// provider. It is exercised directly by an httptest-backed integration
+// test, without a real network listener or sendgrid credentials.
+func newMux(emailsvc email.MailProvider) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/comms/add-policy-vehicle", handlers.AddPolicyVehicle(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-driver", handlers.AddPolicyDriver(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-address", handlers.AddPolicyAddress(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-coverage", handlers.AddPolicyCoverage(emailsvc))
+	return mux
+}
+
 func main() {
 
 	// initialize the email service
@@ -31,12 +44,7 @@ func main() {
 		FromAddress: cfgEmailFromAddress,
 	})
 
-	// setup the api routes
-	http.HandleFunc("/api/comms/add-policy-vehicle", handlers.AddPolicyVehicle(emailsvc))
-	http.HandleFunc("/api/comms/add-policy-driver", handlers.AddPolicyDriver(emailsvc))
-	http.HandleFunc("/api/comms/add-policy-address", handlers.AddPolicyAddress(emailsvc))
-
 	// start the api server
 	log.Print("starting server...")
-	log.Fatal(http.ListenAndServe(":8090", nil))
+	log.Fatal(http.ListenAndServe(":8090", newMux(emailsvc)))
 }

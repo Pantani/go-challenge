@@ -28,6 +28,8 @@ func (c *Client) Purge(_ context.Context, _ string) error { return nil }
 
 func (c *Client) Move(_ context.Context, _, _ string) error { return nil }
 
+func (c *Client) Copy(_ context.Context, _, _ string) error { return nil }
+
 func (c *Client) GetPresignedURL(_ context.Context, filename string, _ time.Duration) (string, error) {
 	return "https://storage.example/" + c.bucket + "/" + filename, nil
 }
