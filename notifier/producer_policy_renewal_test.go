@@ -1,10 +1,11 @@
-package main
+package notifier_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email/mockemail"
 )
@@ -18,10 +19,10 @@ func assertEqual(t *testing.T, label string, want, got any) {
 
 func TestNotifyPolicyRenewal(t *testing.T) {
 	mail := mockemail.NewClient()
-	producer := NewProducer(mail)
+	producer := notifier.NewProducer(mail)
 
 	renewalDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
-	err := producer.NotifyTopic(context.Background(), TopicPolicyRenewal, PolicyRenewalInput{
+	err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, notifier.PolicyRenewalInput{
 		Recipient:    "user@example.com",
 		PolicyNumber: "POL-123",
 		RenewalDate:  renewalDate,
@@ -46,15 +47,15 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 
 	tests := map[string]any{
 		"wrong input type":      "not-a-policy-renewal-input",
-		"missing recipient":     PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
-		"missing policy number": PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
-		"missing renewal date":  PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+		"missing recipient":     notifier.PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
+		"missing policy number": notifier.PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
+		"missing renewal date":  notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
 	}
 
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
-			producer := NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), TopicPolicyRenewal, input); err == nil {
+			producer := notifier.NewProducer(mockemail.NewClient())
+			if err := producer.NotifyTopic(context.Background(), notifier.TopicPolicyRenewal, input); err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
 		})

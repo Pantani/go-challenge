@@ -1,18 +1,19 @@
-package main
+package notifier_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email/mockemail"
 )
 
 func TestNotifyDocumentUpload(t *testing.T) {
 	mail := mockemail.NewClient()
-	producer := NewProducer(mail)
+	producer := notifier.NewProducer(mail)
 
-	err := producer.NotifyTopic(context.Background(), TopicDocumentUpload, DocumentUploadInput{
+	err := producer.NotifyTopic(context.Background(), notifier.TopicDocumentUpload, notifier.DocumentUploadInput{
 		Recipient: "user@example.com",
 		Document:  "policy.pdf",
 	})
@@ -34,7 +35,7 @@ func TestNotifyDocumentUpload(t *testing.T) {
 }
 
 func TestNotifyUnknownTopic(t *testing.T) {
-	err := NewProducer(mockemail.NewClient()).NotifyTopic(context.Background(), "unknown", nil)
+	err := notifier.NewProducer(mockemail.NewClient()).NotifyTopic(context.Background(), "unknown", nil)
 	if err == nil {
 		t.Fatal("expected unknown topic error")
 	}
@@ -43,14 +44,14 @@ func TestNotifyUnknownTopic(t *testing.T) {
 func TestNotifyDocumentUploadInvalidInput(t *testing.T) {
 	tests := map[string]any{
 		"wrong input type":  "not-a-document-upload-input",
-		"missing recipient": DocumentUploadInput{Document: "policy.pdf"},
-		"missing document":  DocumentUploadInput{Recipient: "user@example.com"},
+		"missing recipient": notifier.DocumentUploadInput{Document: "policy.pdf"},
+		"missing document":  notifier.DocumentUploadInput{Recipient: "user@example.com"},
 	}
 
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
-			producer := NewProducer(mockemail.NewClient())
-			if err := producer.NotifyTopic(context.Background(), TopicDocumentUpload, input); err == nil {
+			producer := notifier.NewProducer(mockemail.NewClient())
+			if err := producer.NotifyTopic(context.Background(), notifier.TopicDocumentUpload, input); err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
 		})
@@ -58,7 +59,7 @@ func TestNotifyDocumentUploadInvalidInput(t *testing.T) {
 }
 
 func TestNotifyRequiresRecipient(t *testing.T) {
-	err := NewProducer(mockemail.NewClient()).Notify(context.Background(), Request{})
+	err := notifier.NewProducer(mockemail.NewClient()).Notify(context.Background(), notifier.Request{})
 	if err == nil {
 		t.Fatal("expected error for empty recipients")
 	}
