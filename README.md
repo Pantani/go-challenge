@@ -13,9 +13,10 @@ go vet ./...
 ```
 
 From the repository root, `make check` runs formatting, module tidiness,
-build, vet, lint, complexity, and race-test checks. Carrierproxy's browser
-fixture accepts credentials through `CARRIERPROXY_USERNAME` and
-`CARRIERPROXY_PASSWORD`; it uses no external account.
+build, vet, lint, complexity, and race-test checks. Carrierproxy's
+real-browser test reads `CARRIERPROXY_USERNAME` and `CARRIERPROXY_PASSWORD`
+and, by default, logs into a local fixture site, so it needs no external
+account; `CARRIERPROXY_LOGIN_URL` points it at a real site instead.
 
 ## General Submission Guidelines
 

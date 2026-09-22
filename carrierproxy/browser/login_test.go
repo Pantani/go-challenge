@@ -105,3 +105,34 @@ func TestEvaluateLoginResult(t *testing.T) {
 		})
 	}
 }
+
+func TestLoginWrapsFormFailure(t *testing.T) {
+	fake := successPage()
+	delete(fake.elements, "#username")
+	client := NewClient(testLoginURL)
+	client.newPage = func(time.Duration) (page, func(), error) { return fake, func() {}, nil }
+
+	err := client.Login("user", "password")
+	if err == nil || !strings.Contains(err.Error(), "submit login form") {
+		t.Fatalf("Login() error = %v", err)
+	}
+}
+
+func TestEvaluateLoginResultBannerReadFailures(t *testing.T) {
+	t.Run("class attribute", func(t *testing.T) {
+		page := newFakePage()
+		page.elements["#flash"] = &fakeElement{attrErr: errors.New("detached")}
+		err := evaluateLoginResult(page, newOptions())
+		if err == nil || errors.Is(err, carrierproxy.ErrInvalidCredentials) {
+			t.Fatalf("evaluateLoginResult() error = %v, want a read failure", err)
+		}
+	})
+	t.Run("message text", func(t *testing.T) {
+		page := newFakePage()
+		page.elements["#flash"] = &fakeElement{attr: "flash error", textErr: errors.New("detached")}
+		err := evaluateLoginResult(page, newOptions())
+		if !errors.Is(err, carrierproxy.ErrInvalidCredentials) {
+			t.Fatalf("evaluateLoginResult() error = %v, want ErrInvalidCredentials", err)
+		}
+	})
+}
