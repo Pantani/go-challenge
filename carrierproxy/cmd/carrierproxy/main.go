@@ -13,9 +13,13 @@ import (
 	"github.com/gloveboxhq/glovebox-go-code-challenge/carrierproxy/browser"
 )
 
-// Environment variables read by run.
 const (
+	// envLoginURL names the environment variable holding the login page URL;
+	// defaultLoginURL is used when it is unset.
 	envLoginURL = "CARRIERPROXY_LOGIN_URL"
+
+	// envUsername and envPassword name the environment variables the
+	// credentials are read from.
 	envUsername = "CARRIERPROXY_USERNAME"
 	envPassword = "CARRIERPROXY_PASSWORD"
 

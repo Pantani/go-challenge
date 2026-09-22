@@ -234,6 +234,8 @@ func runHandlerCase(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc
 	assertHandlerDelivery(t, p, tpl, tc)
 }
 
+// runHandlerCases drives every case through the handler built by ctor and
+// asserts on the response and on what the mock provider recorded.
 func runHandlerCases(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc, tpl email.TplID, cases map[string]handlerCase) {
 	t.Helper()
 	for name, tc := range cases {

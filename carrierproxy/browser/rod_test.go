@@ -10,6 +10,8 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 )
 
+// TestNewLauncher checks the launcher runs headless and uses the browser
+// lookPath finds.
 func TestNewLauncher(t *testing.T) {
 	launcher := newLauncher(func() (string, bool) { return "/opt/chrome", true })
 	if launcher.Get(flags.Bin) != "/opt/chrome" || !launcher.Has(flags.Headless) {
@@ -17,6 +19,8 @@ func TestNewLauncher(t *testing.T) {
 	}
 }
 
+// TestLaunchPageWithFailure points the launcher at a binary that exits
+// immediately and checks the launch failure is reported without a closer.
 func TestLaunchPageWithFailure(t *testing.T) {
 	bin, err := exec.LookPath("true")
 	if err != nil {
