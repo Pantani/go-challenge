@@ -35,6 +35,7 @@ func AddPolicyDriver(emailsvc email.MailProvider) http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
 
 		payload := AddPolicyDriverReq{}
@@ -56,6 +57,7 @@ func AddPolicyAddress(emailsvc email.MailProvider) http.HandlerFunc {
 
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
 
 		payload := AddPolicyAddressReq{}

@@ -159,6 +159,8 @@ func TestAddPolicyDriver(t *testing.T) {
 				if lastEmail.ExtractTplID() != tc.expectTplID {
 					t.Fatalf("expected tpl %v but got %v", tc.expectTplID, lastEmail.ExtractTplID())
 				}
+			} else if !testEmail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
 			}
 		}
 	}
@@ -237,6 +239,8 @@ func TestAddPolicyAddress(t *testing.T) {
 				if lastEmail.ExtractTplID() != tc.expectTplID {
 					t.Fatalf("expected tpl %v but got %v", tc.expectTplID, lastEmail.ExtractTplID())
 				}
+			} else if !testEmail.SendLogs().IsEmpty() {
+				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
 			}
 		}
 	}
