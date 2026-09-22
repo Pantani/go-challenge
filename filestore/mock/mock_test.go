@@ -72,6 +72,34 @@ func TestClientSet(t *testing.T) {
 	}
 }
 
+// TestClientBasePath proves BasePath is actually applied as a key prefix
+// rather than ignored: every other test in this file uses an empty
+// BasePath, under which the composed key equals the raw filename, so none
+// of them can tell a client that honors BasePath apart from one that drops
+// it. Two clients share the same underlying object map here specifically
+// so the prefix can be observed from outside the scoped client.
+func TestClientBasePath(t *testing.T) {
+	t.Parallel()
+
+	objects := map[string]*mock.MemoryFile{}
+	scoped := mock.NewClient(mock.Config{BasePath: "tenant-a", Bucket: mock.Bucket{Objects: objects}})
+	unscoped := mock.NewClient(mock.Config{Bucket: mock.Bucket{Objects: objects}})
+
+	if err := scoped.Set(context.Background(), "greeting.txt", []byte("hello world"), "text/plain"); err != nil {
+		t.Fatalf("setting file: %v", err)
+	}
+	if got := readFile(t, scoped, "greeting.txt"); got != "hello world" {
+		t.Fatalf("expected content %q but got %q", "hello world", got)
+	}
+
+	if _, _, err := unscoped.Get(context.Background(), "greeting.txt"); err == nil {
+		t.Fatal("expected a file set under a base path not to be visible without it")
+	}
+	if got := readFile(t, unscoped, "tenant-a/greeting.txt"); got != "hello world" {
+		t.Fatalf("expected content %q at the composed key but got %q", "hello world", got)
+	}
+}
+
 func TestClientPurge(t *testing.T) {
 	t.Parallel()
 
