@@ -2,6 +2,7 @@ package mockemail
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 )
@@ -19,9 +20,9 @@ func (sl *SendLog) ExtractTo() string {
 	return sl.to
 }
 
-// ExtractCC returns the recipients copied on this send, if any.
+// ExtractCC returns a copy of the recipients copied on this send, if any.
 func (sl *SendLog) ExtractCC() []string {
-	return sl.cc
+	return slices.Clone(sl.cc)
 }
 
 // ExtractTplID returns the template used for this send.
@@ -29,9 +30,9 @@ func (sl *SendLog) ExtractTplID() email.TplID {
 	return sl.tplID
 }
 
-// ExtractMessage returns the raw message payload for this send.
+// ExtractMessage returns a copy of the raw message payload for this send.
 func (sl *SendLog) ExtractMessage() json.RawMessage {
-	return sl.message
+	return slices.Clone(sl.message)
 }
 
 // SendLogs is a chronological list of recorded sends.
@@ -42,7 +43,10 @@ func (s SendLogs) IsEmpty() bool {
 	return len(s) == 0
 }
 
-// Last will return the last created log
+// Last returns the most recently recorded log, or nil when none exist.
 func (s SendLogs) Last() *SendLog {
+	if len(s) == 0 {
+		return nil
+	}
 	return &s[len(s)-1]
 }

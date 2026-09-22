@@ -41,6 +41,9 @@ func TestIsFinal(t *testing.T) {
 		"invalid credentials":                      {carrierproxy.ErrInvalidCredentials, true},
 		"malformed response":                       {carrierproxy.ErrMalformedResponse, true},
 		"wrapped invalid credentials":              {fmt.Errorf("submit login form: %w", carrierproxy.ErrInvalidCredentials), true},
+		"not configured":                           {carrierproxy.ErrNotConfigured, true},
+		"wrapped not configured":                   {fmt.Errorf("x: %w", carrierproxy.ErrNotConfigured), true},
+		"nil":                                      {nil, false},
 		"an unrelated error":                       {errors.New("boom"), false},
 		"not logged in is retryable at this level": {carrierproxy.ErrNotLoggedIn, false},
 	}
@@ -252,6 +255,74 @@ func TestAuthenticatedPage(t *testing.T) {
 		_, _, err := c.authenticatedPage("user", "pass")
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+	})
+
+	t.Run("releases the page when the form cannot be submitted", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL)
+		fp := successPage()
+		fp.navigateErr = errors.New("boom")
+		closed := false
+		c.newPage = func(time.Duration) (page, func(), error) { return fp, func() { closed = true }, nil }
+		if _, _, err := c.authenticatedPage("user", "pass"); !errors.Is(err, fp.navigateErr) {
+			t.Fatalf("expected %v, got %v", fp.navigateErr, err)
+		}
+		if !closed {
+			t.Fatal("expected the page to be released on failure")
+		}
+	})
+
+	t.Run("rejects a misconfigured client before opening a page", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithSuccessClass(""))
+		c.newPage = func(time.Duration) (page, func(), error) {
+			t.Fatal("newPage should not be called for a misconfigured client")
+			return nil, nil, nil
+		}
+		if _, _, err := c.authenticatedPage("user", "pass"); !errors.Is(err, carrierproxy.ErrNotConfigured) {
+			t.Fatalf("expected ErrNotConfigured, got %v", err)
+		}
+	})
+}
+
+func TestAttemptWithRetries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the value from the attempt that succeeded", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithRetries(2))
+		c.sleep = func(time.Duration) {}
+		calls := 0
+		got, err := attemptWithRetries(c, func() (int, error) {
+			calls++
+			if calls < 2 {
+				return -1, errors.New("transient")
+			}
+			return 42, nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 42 || calls != 2 {
+			t.Fatalf("got %d after %d calls, want 42 after 2", got, calls)
+		}
+	})
+
+	t.Run("returns the zero value with the last error once exhausted", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithRetries(1))
+		c.sleep = func(time.Duration) {}
+		wantErr := errors.New("persistent")
+		got, err := attemptWithRetries(c, func() (string, error) { return "partial", wantErr })
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+		if got != "partial" {
+			// The last attempt's value is passed through untouched; callers
+			// return nil/zero themselves on error, so this documents rather
+			// than guarantees the behaviour.
+			t.Fatalf("got %q, want the last attempt's value", got)
 		}
 	})
 }

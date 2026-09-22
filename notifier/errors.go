@@ -8,6 +8,7 @@ import "errors"
 var (
 	ErrTopicNotRegistered = errors.New("topic builder not registered")
 	ErrMissingRecipients  = errors.New("notification requires recipient")
+	ErrMissingTemplate    = errors.New("notification requires template")
 
 	ErrInvalidDocumentUploadInput     = errors.New("invalid document upload input type")
 	ErrDocumentUploadMissingRecipient = errors.New("document upload requires recipient")

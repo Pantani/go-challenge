@@ -34,10 +34,14 @@ func TestClientDocumentDownload(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects an invalid downloadKey", func(t *testing.T) {
+	t.Run("rejects an invalid downloadKey without opening a page", func(t *testing.T) {
 		t.Parallel()
 		c := NewClient(testLoginURL, WithDocumentURL(testDocumentURL))
 		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
+		c.newPage = func(time.Duration) (page, func(), error) {
+			t.Fatal("newPage should not be called for an invalid downloadKey")
+			return nil, nil, nil
+		}
 
 		for _, key := range []string{"", ".", "..", "has/slash", `has\backslash`} {
 			if _, err := c.DocumentDownload(key); err == nil {
@@ -97,6 +101,29 @@ func TestClientDocumentDownload(t *testing.T) {
 		}
 		if !reflect.DeepEqual(gotCookies, fp.cookies) {
 			t.Fatalf("got cookies %+v, want %+v", gotCookies, fp.cookies)
+		}
+	})
+
+	t.Run("exhausts retries and returns the last error with no document", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithDocumentURL(testDocumentURL), WithRetries(1))
+		c.sleep = func(time.Duration) {}
+		c.rememberCredentials("tomsmith", "SuperSecretPassword!")
+		fp := successPage()
+		c.newPage = func(time.Duration) (page, func(), error) { return fp, func() {}, nil }
+		wantErr := errors.New("persistent")
+		calls := 0
+		c.fetch = func(string, []cookie, time.Duration) (io.ReadCloser, error) { calls++; return nil, wantErr }
+
+		got, err := c.DocumentDownload("key")
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+		if got != nil {
+			t.Fatalf("expected no document on failure, got %v", got)
+		}
+		if calls != 2 {
+			t.Fatalf("expected 2 attempts, got %d", calls)
 		}
 	})
 
