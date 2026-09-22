@@ -161,7 +161,18 @@ tidy-$(1):
 
 tidy-check-$(1):
 	@echo ">> tidy-check $(1)"
-	cd $(1) && $(GO) mod tidy -diff
+	@# portable alternative to `go mod tidy -diff` (Go 1.23+): tidy, diff against a backup, restore
+	@cd $(1) && bak="$$$$(mktemp -d)" && cp go.mod "$$$$bak/" && { [ ! -f go.sum ] || cp go.sum "$$$$bak/"; } && \
+	status=0 && $(GO) mod tidy || status=$$$$?; \
+	if [ "$$$$status" -eq 0 ]; then \
+		diff -u "$$$$bak/go.mod" go.mod || status=1; \
+		if [ -f "$$$$bak/go.sum" ] || [ -f go.sum ]; then diff -u "$$$$bak/go.sum" go.sum 2>/dev/null || { [ ! -f "$$$$bak/go.sum" ] && [ ! -s go.sum ]; } || status=1; fi; \
+	fi; \
+	cp "$$$$bak/go.mod" go.mod; \
+	if [ -f "$$$$bak/go.sum" ]; then cp "$$$$bak/go.sum" go.sum; else rm -f go.sum; fi; \
+	rm -rf "$$$$bak"; \
+	[ "$$$$status" -eq 0 ] || echo "go.mod/go.sum not tidy (run 'make tidy-$(1)')"; \
+	exit "$$$$status"
 
 build-$(1):
 	@echo ">> build $(1)"
