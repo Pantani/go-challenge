@@ -22,15 +22,21 @@ The application needs to copy an existing stored file to a new key without expos
 Copy(ctx context.Context, oldFilename, newFilename string) error
 ```
 
-Both providers implement the method, but only `mock.Client` gives it real behavior:
+`Copy` duplicates `oldFilename` to `newFilename` (content and content type) as a new, independent object and leaves the source in place. `Move` is the same operation followed by removing the source. Both providers implement it with identical semantics:
 
-* **In-memory mock** (`mock.Client`) — duplicates the file stored under `oldFilename` to `newFilename` into a new, independent object, leaving the original untouched, so closing or reading one copy never affects the other. Enforces the error contract below.
-* **S3-shaped client** (`s3.Client`) — a no-op stub, consistent with its other methods: it ignores both filenames and always returns `nil`, without creating a destination or checking whether either file exists.
+* **In-memory mock** (`mock.Client`) — keeps objects in a map guarded by a `sync.RWMutex`, so it is safe for concurrent use and `Copy`/`Move` are atomic. Every `Get` returns a fresh reader over the stored bytes, so reading or closing one reader never affects the stored file or other readers.
+* **S3-shaped client** (`s3.Client`) — talks to an `s3.ObjectAPI`, a narrow interface shaped after the S3 object operations it needs (`HeadObject`, `GetObject`, `PutObject`, `CopyObject`, `DeleteObject`, `PresignGetObject`). Plug in a thin adapter over a real SDK through `s3.Config.API`; adapters must translate the SDK's "key does not exist" error into `s3.ErrNoSuchKey`. When no API is configured the client behaves like an empty bucket that discards writes, so the module can be wired up without credentials. `s3/s3test.MemoryAPI` is an in-memory `ObjectAPI` for tests. Because S3's `CopyObject` overwrites silently, the client probes the destination with `HeadObject` before copying; the two calls are not atomic.
 
-### Error contract (`mock.Client` only)
+### Error contract
 
-* `filestore.ErrNotFound` — `oldFilename` does not exist.
-* `filestore.ErrFileExists` — `newFilename` already exists.
+The sentinels live in package `filestore` and may be wrapped with the operation and filename, so compare them with `errors.Is`.
+
+* `filestore.ErrNotFound` — `Get`, `Move`, `Copy` and `GetPresignedURL` when the (source) file does not exist. `Purge` is idempotent and never reports a missing file.
+* `filestore.ErrFileExists` — `Move` and `Copy` when the destination already exists, including moving or copying a file onto itself. Providers never overwrite implicitly; `Purge` the destination first.
+
+When both conditions hold, `ErrFileExists` takes precedence: the destination is checked first so that S3 needs a single existence probe before `CopyObject`, and the mock mirrors that order. In every error case both files are left untouched.
+
+Every operation checks its context before doing any work and returns `ctx.Err()` when it is already done.
 
 ## Running the tests
 
@@ -38,4 +44,4 @@ Both providers implement the method, but only `mock.Client` gives it real behavi
 go test ./... -race -cover
 ```
 
-`filestore/mock` and `filestore/s3` are both at 100% statement coverage. `filestore/cmd/filestore` factors its logic into a `run()` helper so the demo's behavior is covered; the `main` wrapper itself is intentionally left untested, since it calls `log.Fatal`.
+`filestore_test.go` holds a contract suite that runs the same scenarios (success, missing source, destination conflict, self-copy, cancelled context) against both providers. `filestore/cmd/filestore` factors its logic into a `run()` helper that stores, copies and reads a file back; the `main` wrapper itself is intentionally left untested, since it calls `log.Fatal`.

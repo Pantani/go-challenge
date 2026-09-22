@@ -1,38 +1,30 @@
 package notifier
 
-import (
-	"context"
+import "github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 
-	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
-)
-
+// TopicDocumentUpload is the notification topic for a newly uploaded document.
 const TopicDocumentUpload = "document-upload"
 
+// DocumentUploadInput is the typed input for the document-upload topic.
+// Both fields are required.
 type DocumentUploadInput struct {
 	Recipient string
 	Document  string
 }
 
-type docUploadTopicBuilder struct{}
+var docUploadTopicBuilder = topicBuilder[DocumentUploadInput]{
+	topic:           TopicDocumentUpload,
+	tpl:             email.TplDocumentUpload,
+	errInvalidInput: ErrInvalidDocumentUploadInput,
+	build:           buildDocumentUpload,
+}
 
-func (docUploadTopicBuilder) Topic() string { return TopicDocumentUpload }
-
-func (docUploadTopicBuilder) BuildRequest(_ context.Context, input any) (Request, error) {
-
-	typedInput, ok := input.(DocumentUploadInput)
-	if !ok {
-		return Request{}, ErrInvalidDocumentUploadInput
+func buildDocumentUpload(in DocumentUploadInput) (string, map[string]any, error) {
+	if in.Recipient == "" {
+		return "", nil, ErrDocumentUploadMissingRecipient
 	}
-	if typedInput.Recipient == "" {
-		return Request{}, ErrDocumentUploadMissingRecipient
+	if in.Document == "" {
+		return "", nil, ErrDocumentUploadMissingDocument
 	}
-	if typedInput.Document == "" {
-		return Request{}, ErrDocumentUploadMissingDocument
-	}
-	return Request{
-		Topic:      TopicDocumentUpload,
-		Recipients: []string{typedInput.Recipient},
-		Template:   email.TplDocumentUpload,
-		Vars:       map[string]any{"document": typedInput.Document},
-	}, nil
+	return in.Recipient, map[string]any{"document": in.Document}, nil
 }

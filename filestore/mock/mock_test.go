@@ -3,7 +3,11 @@ package mock_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,90 +15,67 @@ import (
 	"github.com/gloveboxhq/glovebox-go-code-challenge/filestore/mock"
 )
 
-func newClientWithFiles(t *testing.T, files map[string]string) *mock.Client {
+// readFile returns the contents and content type of filename.
+func readFile(t *testing.T, client *mock.Client, filename string) (string, string) {
 	t.Helper()
 
-	objects := map[string]*mock.MemoryFile{}
-	for name, content := range files {
-		file := &mock.MemoryFile{}
-		if _, err := file.WriteString(content); err != nil {
-			t.Fatalf("seeding file %q: %v", name, err)
-		}
-		objects[name] = file
-	}
-
-	return mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test", Objects: objects}})
-}
-
-func readFile(t *testing.T, client *mock.Client, filename string) string {
-	t.Helper()
-
-	rc, _, err := client.Get(context.Background(), filename)
+	rc, contentType, err := client.Get(context.Background(), filename)
 	if err != nil {
 		t.Fatalf("getting %q: %v", filename, err)
 	}
-	defer func() {
-		if err := rc.Close(); err != nil {
-			t.Errorf("closing %q: %v", filename, err)
-		}
-	}()
-
 	content, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("reading %q: %v", filename, err)
 	}
-	return string(content)
+	if err := rc.Close(); err != nil {
+		t.Fatalf("closing %q: %v", filename, err)
+	}
+	return string(content), contentType
 }
 
-func TestClientGet(t *testing.T) {
+func TestSeededObjects(t *testing.T) {
 	t.Parallel()
 
-	client := newClientWithFiles(t, map[string]string{"greeting.txt": "hello world"})
-
-	if got := readFile(t, client, "greeting.txt"); got != "hello world" {
-		t.Fatalf("expected content %q but got %q", "hello world", got)
+	tests := []struct {
+		name            string
+		file            *mock.MemoryFile
+		wantContentType string
+	}{
+		{name: "constructor", file: mock.NewMemoryFile([]byte("hello world"), "text/plain"), wantContentType: "text/plain"},
+		{name: "zero value written by hand", file: writtenFile("hello world"), wantContentType: mock.DefaultContentType},
 	}
-	if _, _, err := client.Get(context.Background(), "missing.txt"); err == nil {
-		t.Fatal("expected error getting a missing file")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestClientGetDoesNotConsumeStoredFile(t *testing.T) {
-	t.Parallel()
+			objects := map[string]*mock.MemoryFile{"greeting.txt": tt.file}
+			client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test", Objects: objects}})
 
-	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test"}})
-	if err := client.Set(context.Background(), "greeting.txt", []byte("hello world"), "text/plain"); err != nil {
-		t.Fatalf("setting file: %v", err)
-	}
-
-	if got := readFile(t, client, "greeting.txt"); got != "hello world" {
-		t.Fatalf("expected content %q on first get but got %q", "hello world", got)
-	}
-	if got := readFile(t, client, "greeting.txt"); got != "hello world" {
-		t.Fatalf("expected content %q on second get but got %q", "hello world", got)
-	}
-}
-
-func TestClientSet(t *testing.T) {
-	t.Parallel()
-
-	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test"}})
-
-	if err := client.Set(context.Background(), "greeting.txt", []byte("hello world"), "text/plain"); err != nil {
-		t.Fatalf("setting file: %v", err)
-	}
-	if got := readFile(t, client, "greeting.txt"); got != "hello world" {
-		t.Fatalf("expected content %q but got %q", "hello world", got)
+			data, contentType := readFile(t, client, "greeting.txt")
+			if data != "hello world" || contentType != tt.wantContentType {
+				t.Fatalf("Get = (%q, %q), want (%q, %q)", data, contentType, "hello world", tt.wantContentType)
+			}
+			// The seeded map stays the client's backing store.
+			if err := client.Purge(context.Background(), "greeting.txt"); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := objects["greeting.txt"]; ok {
+				t.Fatal("Purge did not remove the object from the seeded map")
+			}
+		})
 	}
 }
 
-// TestClientBasePath proves BasePath is actually applied as a key prefix
-// rather than ignored: every other test in this file uses an empty
-// BasePath, under which the composed key equals the raw filename, so none
-// of them can tell a client that honors BasePath apart from one that drops
-// it. Two clients share the same underlying object map here specifically
-// so the prefix can be observed from outside the scoped client.
-func TestClientBasePath(t *testing.T) {
+func writtenFile(content string) *mock.MemoryFile {
+	f := &mock.MemoryFile{}
+	_, _ = f.WriteString(content)
+	return f
+}
+
+// TestBasePath proves BasePath is applied as a forward-slash key prefix
+// rather than ignored: two clients share the same underlying object map so
+// the composed key can be observed from outside the scoped client.
+func TestBasePath(t *testing.T) {
 	t.Parallel()
 
 	objects := map[string]*mock.MemoryFile{}
@@ -104,198 +85,110 @@ func TestClientBasePath(t *testing.T) {
 	if err := scoped.Set(context.Background(), "greeting.txt", []byte("hello world"), "text/plain"); err != nil {
 		t.Fatalf("setting file: %v", err)
 	}
-	if got := readFile(t, scoped, "greeting.txt"); got != "hello world" {
+	if got, _ := readFile(t, scoped, "greeting.txt"); got != "hello world" {
 		t.Fatalf("expected content %q but got %q", "hello world", got)
 	}
-
-	if _, _, err := unscoped.Get(context.Background(), "greeting.txt"); err == nil {
-		t.Fatal("expected a file set under a base path not to be visible without it")
+	if _, _, err := unscoped.Get(context.Background(), "greeting.txt"); !errors.Is(err, filestore.ErrNotFound) {
+		t.Fatalf("file set under a base path visible without it: error = %v", err)
 	}
-	if got := readFile(t, unscoped, "tenant-a/greeting.txt"); got != "hello world" {
+	if got, _ := readFile(t, unscoped, "tenant-a/greeting.txt"); got != "hello world" {
 		t.Fatalf("expected content %q at the composed key but got %q", "hello world", got)
 	}
-}
 
-func TestClientPurge(t *testing.T) {
-	t.Parallel()
-
-	client := newClientWithFiles(t, map[string]string{"greeting.txt": "hello world"})
-
-	if err := client.Purge(context.Background(), "greeting.txt"); err != nil {
-		t.Fatalf("purging file: %v", err)
-	}
-	if _, _, err := client.Get(context.Background(), "greeting.txt"); err == nil {
-		t.Fatal("expected error getting a purged file")
-	}
-}
-
-func TestClientGetPresignedURL(t *testing.T) {
-	t.Parallel()
-
-	client := newClientWithFiles(t, map[string]string{"greeting.txt": "hello world"})
-
-	url, err := client.GetPresignedURL(context.Background(), "greeting.txt", time.Minute)
+	url, err := scoped.GetPresignedURL(context.Background(), "greeting.txt", time.Minute)
 	if err != nil {
-		t.Fatalf("getting presigned url: %v", err)
+		t.Fatalf("presigning: %v", err)
 	}
-	if url == "" {
-		t.Fatal("expected a non-empty presigned url")
+	if !strings.HasSuffix(url, "/tenant-a/greeting.txt") {
+		t.Fatalf("presigned URL %q does not end with the composed key", url)
 	}
-	if _, err := client.GetPresignedURL(context.Background(), "missing.txt", time.Minute); err == nil {
-		t.Fatal("expected error for a missing file")
+}
+
+// TestReadersAreIndependent covers the historical bug where Get handed out
+// the stored buffer itself, so reading or closing the reader destroyed the
+// file.
+func TestReadersAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	client := mock.NewClient(mock.Config{})
+	if err := client.Set(context.Background(), "a.txt", []byte("abcdef"), "text/plain"); err != nil {
+		t.Fatal(err)
 	}
+
+	first, _, err := client.Get(context.Background(), "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Read(make([]byte, 2)); err != nil {
+		t.Fatalf("partial read: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Read(make([]byte, 1)); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("read after close: error = %v, want fs.ErrClosed", err)
+	}
+
+	if got, _ := readFile(t, client, "a.txt"); got != "abcdef" {
+		t.Fatalf("stored content = %q after a partial read and close, want %q", got, "abcdef")
+	}
+	if err := client.Copy(context.Background(), "a.txt", "b.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readFile(t, client, "b.txt"); got != "abcdef" {
+		t.Fatalf("copied content = %q, want %q", got, "abcdef")
+	}
+}
+
+func TestConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test"}})
+	ctx := context.Background()
+	const workers, rounds = 8, 50
+
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name := fmt.Sprintf("w%d.txt", w)
+			copyName := fmt.Sprintf("w%d-copy.txt", w)
+			for range rounds {
+				if err := client.Set(ctx, name, []byte(name), "text/plain"); err != nil {
+					t.Error(err)
+				}
+				if got, _ := readFile(t, client, name); got != name {
+					t.Errorf("got %q, want %q", got, name)
+				}
+				if err := client.Copy(ctx, name, copyName); err != nil {
+					t.Error(err)
+				}
+				if err := client.Move(ctx, copyName, name); !errors.Is(err, filestore.ErrFileExists) {
+					t.Errorf("Move onto taken key: error = %v", err)
+				}
+				if _, err := client.GetPresignedURL(ctx, name, time.Minute); err != nil {
+					t.Error(err)
+				}
+				for _, n := range []string{name, copyName} {
+					if err := client.Purge(ctx, n); err != nil {
+						t.Error(err)
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestMemoryFileReadAfterClose(t *testing.T) {
 	t.Parallel()
 
-	file := &mock.MemoryFile{}
-	if _, err := file.WriteString("hello world"); err != nil {
-		t.Fatalf("writing file: %v", err)
-	}
+	file := mock.NewMemoryFile([]byte("hello world"), "")
 	if err := file.Close(); err != nil {
 		t.Fatalf("closing file: %v", err)
 	}
-	if _, err := file.Read(make([]byte, 1)); err == nil {
-		t.Fatal("expected error reading a closed file")
-	}
-}
-
-type moveCase struct {
-	setup       map[string]string
-	oldFilename string
-	newFilename string
-	wantErr     bool
-}
-
-func TestClientMove(t *testing.T) {
-	t.Parallel()
-
-	testCases := map[string]moveCase{
-		"success": {
-			setup:       map[string]string{"source.txt": "hello world"},
-			oldFilename: "source.txt",
-			newFilename: "destination.txt",
-		},
-		"missing source": {
-			oldFilename: "missing.txt",
-			newFilename: "destination.txt",
-			wantErr:     true,
-		},
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) { runMoveCase(t, tc) })
-	}
-}
-
-func runMoveCase(t *testing.T, tc moveCase) {
-	t.Helper()
-
-	client := newClientWithFiles(t, tc.setup)
-
-	err := client.Move(context.Background(), tc.oldFilename, tc.newFilename)
-	if tc.wantErr {
-		if err == nil {
-			t.Fatal("expected error moving file")
-		}
-		return
-	}
-	if err != nil {
-		t.Fatalf("unexpected error moving file: %v", err)
-	}
-
-	if got := readFile(t, client, tc.newFilename); got != "hello world" {
-		t.Fatalf("expected content %q but got %q", "hello world", got)
-	}
-	if _, _, err := client.Get(context.Background(), tc.oldFilename); err == nil {
-		t.Fatal("expected old key to be gone after move")
-	}
-}
-
-type copyCase struct {
-	setup       map[string]string
-	oldFilename string
-	newFilename string
-	wantErr     error
-	wantContent string
-}
-
-func TestClientCopy(t *testing.T) {
-	t.Parallel()
-
-	testCases := map[string]copyCase{
-		"success": {
-			setup:       map[string]string{"source.txt": "hello world"},
-			oldFilename: "source.txt",
-			newFilename: "destination.txt",
-			wantContent: "hello world",
-		},
-		"missing source": {
-			oldFilename: "missing.txt",
-			newFilename: "destination.txt",
-			wantErr:     filestore.ErrNotFound,
-		},
-		"destination conflict": {
-			setup: map[string]string{
-				"source.txt":      "hello world",
-				"destination.txt": "existing content",
-			},
-			oldFilename: "source.txt",
-			newFilename: "destination.txt",
-			wantErr:     filestore.ErrFileExists,
-		},
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) { runCopyCase(t, tc) })
-	}
-}
-
-func runCopyCase(t *testing.T, tc copyCase) {
-	t.Helper()
-
-	client := newClientWithFiles(t, tc.setup)
-
-	err := client.Copy(context.Background(), tc.oldFilename, tc.newFilename)
-	if tc.wantErr != nil {
-		if !errors.Is(err, tc.wantErr) {
-			t.Fatalf("expected error %v but got %v", tc.wantErr, err)
-		}
-		return
-	}
-	if err != nil {
-		t.Fatalf("unexpected error copying file: %v", err)
-	}
-
-	if got := readFile(t, client, tc.newFilename); got != tc.wantContent {
-		t.Fatalf("expected copied content %q but got %q", tc.wantContent, got)
-	}
-	if got := readFile(t, client, tc.oldFilename); got != tc.wantContent {
-		t.Fatalf("expected source content %q but got %q", tc.wantContent, got)
-	}
-}
-
-func TestClientCopyAfterSourceReadAndClose(t *testing.T) {
-	t.Parallel()
-
-	client := newClientWithFiles(t, map[string]string{"source.txt": "abcdef"})
-
-	rc, _, err := client.Get(context.Background(), "source.txt")
-	if err != nil {
-		t.Fatalf("getting source file: %v", err)
-	}
-	if _, err := rc.Read(make([]byte, 2)); err != nil {
-		t.Fatalf("partially reading source file: %v", err)
-	}
-	if err := rc.Close(); err != nil {
-		t.Fatalf("closing source file: %v", err)
-	}
-
-	if err := client.Copy(context.Background(), "source.txt", "destination.txt"); err != nil {
-		t.Fatalf("unexpected error copying file: %v", err)
-	}
-	if got := readFile(t, client, "destination.txt"); got != "abcdef" {
-		t.Fatalf("expected copied content %q but got %q", "abcdef", got)
+	if _, err := file.Read(make([]byte, 1)); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("read after close: error = %v, want fs.ErrClosed", err)
 	}
 }

@@ -36,6 +36,30 @@ func TestValidateCredentials(t *testing.T) {
 	}
 }
 
+func TestValidateLoginOptions(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		successClass string
+		wantErr      error
+	}{
+		"the default success class is fine":       {newOptions().successClass, nil},
+		"any non-empty class is fine":             {"ok", nil},
+		"an empty class is a configuration error": {"", carrierproxy.ErrNotConfigured},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			opts := newOptions()
+			opts.successClass = tc.successClass
+			if err := validateLoginOptions(opts); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestFillField(t *testing.T) {
 	t.Parallel()
 
@@ -185,18 +209,6 @@ func TestEvaluateLoginResult(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty success class is a configuration error", func(t *testing.T) {
-		t.Parallel()
-		p := newFakePage()
-		p.elements[opts.resultSelector] = &fakeElement{attr: "flash success"}
-		badOpts := opts
-		badOpts.successClass = ""
-		err := evaluateLoginResult(p, badOpts)
-		if !errors.Is(err, carrierproxy.ErrNotConfigured) {
-			t.Fatalf("expected ErrNotConfigured, got %v", err)
-		}
-	})
-
 	t.Run("error class carries message", func(t *testing.T) {
 		t.Parallel()
 		p := newFakePage()
@@ -336,6 +348,60 @@ func TestClientLogin(t *testing.T) {
 		}
 		if _, err := c.storedCredentials(); !errors.Is(err, carrierproxy.ErrNotLoggedIn) {
 			t.Fatalf("expected rejected credentials not to be remembered, got %v", err)
+		}
+	})
+
+	t.Run("a misconfigured client fails before opening a page and is not retried", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithSuccessClass(""), WithRetries(3))
+		c.sleep = func(time.Duration) { t.Fatal("should not sleep: a configuration error must not be retried") }
+		c.newPage = func(time.Duration) (page, func(), error) {
+			t.Fatal("newPage should not be called for a misconfigured client")
+			return nil, nil, nil
+		}
+		if err := c.Login("user", "pass"); !errors.Is(err, carrierproxy.ErrNotConfigured) {
+			t.Fatalf("expected ErrNotConfigured, got %v", err)
+		}
+	})
+
+	t.Run("retries a transient launch failure, then succeeds and remembers the credentials", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithRetries(1))
+		c.sleep = func(time.Duration) {}
+		launches := 0
+		c.newPage = func(time.Duration) (page, func(), error) {
+			launches++
+			if launches == 1 {
+				return nil, nil, errors.New("browser slow to start")
+			}
+			return successPage(), func() {}, nil
+		}
+		if err := c.Login("tomsmith", "SuperSecretPassword!"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if launches != 2 {
+			t.Fatalf("expected 2 launches, got %d", launches)
+		}
+		if _, err := c.storedCredentials(); err != nil {
+			t.Fatalf("expected credentials to be remembered after the retried success, got %v", err)
+		}
+	})
+
+	t.Run("exhausts retries, returns the last error and remembers nothing", func(t *testing.T) {
+		t.Parallel()
+		c := NewClient(testLoginURL, WithRetries(2))
+		c.sleep = func(time.Duration) {}
+		wantErr := errors.New("persistent")
+		launches := 0
+		c.newPage = func(time.Duration) (page, func(), error) { launches++; return nil, nil, wantErr }
+		if err := c.Login("user", "pass"); !errors.Is(err, wantErr) {
+			t.Fatalf("expected %v, got %v", wantErr, err)
+		}
+		if launches != 3 {
+			t.Fatalf("expected 3 launches (1 + 2 retries), got %d", launches)
+		}
+		if _, err := c.storedCredentials(); !errors.Is(err, carrierproxy.ErrNotLoggedIn) {
+			t.Fatalf("expected nothing remembered after a failed Login, got %v", err)
 		}
 	})
 

@@ -29,13 +29,9 @@ func (c *Client) DocumentDownload(downloadKey string) (io.ReadCloser, error) {
 		return nil, err
 	}
 
-	var doc io.ReadCloser
-	err = c.withRetries(func() error {
-		var attemptErr error
-		doc, attemptErr = c.fetchDocument(creds, downloadKey)
-		return attemptErr
+	return attemptWithRetries(c, func() (io.ReadCloser, error) {
+		return c.fetchDocument(creds, downloadKey)
 	})
-	return doc, err
 }
 
 // validateDownloadKey rejects a key that is empty, ".", "..", or contains
