@@ -3,13 +3,16 @@
 package mockemail
 
 import (
+	"fmt"
 	"maps"
 	"sync"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 )
 
-// Client records every successful Send. It is safe for concurrent use.
+// Client synchronizes its internal log collection. Each successful send copies
+// the top-level Vars map; nested mutable values remain caller-owned and require
+// caller synchronization.
 type Client struct {
 	mu       sync.Mutex
 	sendLogs SendLogs
@@ -28,12 +31,18 @@ func (c *Client) SetSendError(err error) {
 	c.sendErr = err
 }
 
-// Send validates the recipients the same way a real provider would, then
-// records one SendLog per recipient.
+// Send validates and records a delivery.
 func (c *Client) Send(to []string, tpl email.TplID, vars map[string]any) error {
 	if err := email.RequireRecipient(to); err != nil {
-		return err
+		return fmt.Errorf("mockemail send: %w", err)
 	}
+	if err := email.RequireTemplate(tpl); err != nil {
+		return fmt.Errorf("mockemail send: %w", err)
+	}
+	return c.record(to, tpl, vars)
+}
+
+func (c *Client) record(to []string, tpl email.TplID, vars map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sendErr != nil {
@@ -45,8 +54,8 @@ func (c *Client) Send(to []string, tpl email.TplID, vars map[string]any) error {
 	return nil
 }
 
-// SendLogs returns a snapshot copy of the recorded sends. Later sends or a
-// FlushSendLogs do not affect a snapshot already handed out.
+// SendLogs returns a new log slice and a shallow copy of each Vars map.
+// Nested maps, slices, and pointers are shared with the caller's original values.
 func (c *Client) SendLogs() SendLogs {
 	c.mu.Lock()
 	defer c.mu.Unlock()

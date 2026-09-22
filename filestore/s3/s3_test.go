@@ -114,22 +114,34 @@ func TestAPIErrorsArePropagated(t *testing.T) {
 			api.errs[tt.method] = errBoom
 			client := NewClient(Config{Bucket: "my-bucket", API: api})
 
-			err := tt.call(client)
-			if !errors.Is(err, errBoom) {
-				t.Fatalf("error = %v, want wrapped errBoom", err)
-			}
-			if errors.Is(err, filestore.ErrNotFound) || errors.Is(err, filestore.ErrFileExists) {
-				t.Fatalf("unrelated API error %v was mapped onto a filestore sentinel", err)
-			}
-			if !strings.HasPrefix(err.Error(), "s3: ") {
-				t.Errorf("error %q lacks operation context", err)
-			}
-			for _, b := range api.buckets {
-				if b != "my-bucket" {
-					t.Fatalf("API called with bucket %q", b)
-				}
-			}
+			assertAdapterError(t, tt.call(client))
+			assertAPIBuckets(t, api.buckets)
 		})
+	}
+}
+
+func assertAdapterError(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("error = %v, want wrapped errBoom", err)
+	}
+	if errors.Is(err, filestore.ErrNotFound) || errors.Is(err, filestore.ErrFileExists) {
+		t.Fatalf("unrelated error mapped to sentinel: %v", err)
+	}
+	if !strings.HasPrefix(err.Error(), "s3: ") {
+		t.Fatalf("missing operation context: %v", err)
+	}
+}
+
+func assertAPIBuckets(t *testing.T, buckets []string) {
+	t.Helper()
+	if len(buckets) == 0 {
+		t.Fatal("no adapter calls observed")
+	}
+	for _, bucket := range buckets {
+		if bucket != "my-bucket" {
+			t.Fatalf("adapter bucket = %q", bucket)
+		}
 	}
 }
 

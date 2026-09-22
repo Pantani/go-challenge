@@ -1,5 +1,5 @@
-// Package sendgrid implements email.MailProvider on top of the sendgrid v3
-// mail client.
+// Package sendgrid implements email.MailProvider using a local SendGrid-shaped
+// stand-in. It does not deliver email over the network.
 package sendgrid
 
 import (
@@ -31,8 +31,7 @@ type mailClient interface {
 	Send(v3mail *mail.V3Mail) error
 }
 
-// NewSvc builds a Client that authenticates with cfg.APIKey and sends from
-// cfg.FromName/cfg.FromAddress.
+// NewSvc builds a local stand-in client with the configured sender identity.
 func NewSvc(cfg Config) *Client {
 	return &Client{
 		client:      mail.NewSendClient(cfg.APIKey),
@@ -41,7 +40,7 @@ func NewSvc(cfg Config) *Client {
 	}
 }
 
-// Client is an email.MailProvider backed by the sendgrid v3 mail API.
+// Client constructs mail for the bundled, non-networking stand-in.
 type Client struct {
 	client      mailClient
 	fromAddress string

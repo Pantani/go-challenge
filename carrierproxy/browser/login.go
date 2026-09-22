@@ -12,33 +12,23 @@ import (
 // carrierproxy.ErrInvalidCredentials (wrapped with the site's own message)
 // when the site rejects the credentials, or the last wrapped error for any
 // other failure (browser launch, navigation, missing form elements, a
-// timed-out wait — see WithTimeout). Non-credential failures are retried
-// (see WithRetries/WithRetryDelay); an invalid-credentials result is
-// never retried, since the same credentials would just fail again. On
-// success, username/password are remembered so Policies and
-// DocumentDownload can re-authenticate.
+// timed-out wait — see WithTimeout).
 func (c *Client) Login(username, password string) error {
 	if err := validateCredentials(username, password); err != nil {
 		return err
 	}
-
-	err := c.withRetries(func() error { return c.loginOnce(username, password) })
-	if err == nil {
-		c.rememberCredentials(username, password)
-	}
-	return err
-}
-
-// loginOnce is a single login attempt: open a fresh page, submit the
-// form, confirm the site accepted it, then release the page. It is the
-// unit of work withRetries repeats.
-func (c *Client) loginOnce(username, password string) error {
-	_, closePage, err := c.authenticatedPage(username, password)
-	if err != nil {
+	if err := validateLoginOptions(c.opts); err != nil {
 		return err
 	}
-	closePage()
-	return nil
+	pg, closePage, err := c.newPage(c.opts.timeout)
+	if err != nil {
+		return fmt.Errorf("carrierproxy: launch browser: %w", err)
+	}
+	defer closePage()
+	if err := fillLoginForm(pg, c.loginURL, c.opts, username, password); err != nil {
+		return fmt.Errorf("carrierproxy: submit login form: %w", err)
+	}
+	return evaluateLoginResult(pg, c.opts)
 }
 
 // validateLoginOptions rejects options that no login attempt could
@@ -76,7 +66,10 @@ func fillLoginForm(pg page, loginURL string, opts options, username, password st
 	if err := fillField(pg, opts.passwordSelector, password); err != nil {
 		return err
 	}
-	return clickSubmit(pg, opts.submitSelector)
+	if err := clickSubmit(pg, opts.submitSelector); err != nil {
+		return err
+	}
+	return pg.WaitLoad()
 }
 
 // fillField locates the element matching selector and types value into it.

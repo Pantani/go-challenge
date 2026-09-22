@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
@@ -27,10 +28,10 @@ var policyRenewalTopicBuilder = topicBuilder[PolicyRenewalInput]{
 // buildPolicyRenewal validates a PolicyRenewalInput and returns the template
 // variables: policyNumber and renewalDate formatted as YYYY-MM-DD.
 func buildPolicyRenewal(in PolicyRenewalInput) (string, map[string]any, error) {
-	if in.Recipient == "" {
+	if strings.TrimSpace(in.Recipient) == "" {
 		return "", nil, ErrPolicyRenewalMissingRecipient
 	}
-	if in.PolicyNumber == "" {
+	if strings.TrimSpace(in.PolicyNumber) == "" {
 		return "", nil, ErrPolicyRenewalMissingPolicyNumber
 	}
 	if in.RenewalDate.IsZero() {

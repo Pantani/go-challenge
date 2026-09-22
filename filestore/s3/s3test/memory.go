@@ -81,6 +81,9 @@ func (m *MemoryAPI) PutObject(ctx context.Context, bucket, key string, body io.R
 	if err != nil {
 		return err
 	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
 	m.put(bucket, key, object{data: data, contentType: contentType})
 	return nil
 }

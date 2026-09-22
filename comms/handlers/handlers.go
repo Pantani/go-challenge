@@ -184,13 +184,11 @@ func (e envelope) normalize() envelope {
 }
 
 // deliver sends the envelope through svc, using SendWithCC only when there
-// are CC recipients left after normalisation.
+// are CC recipients left after normalization.
 func (e envelope) deliver(svc email.MailProvider, tpl email.TplID) error {
-
 	if len(e.cc) == 0 {
 		return svc.Send([]string{e.to}, e.message, tpl)
 	}
-
 	return svc.SendWithCC([]string{e.to}, e.cc, e.message, tpl)
 }
 

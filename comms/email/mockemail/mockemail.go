@@ -40,7 +40,6 @@ func (c *Client) SendWithCC(to, cc []string, message json.RawMessage, tplID emai
 // record appends one SendLog per to recipient, each carrying its own copy
 // of the cc list, message and template for that send.
 func (c *Client) record(to, cc []string, message json.RawMessage, tplID email.TplID) error {
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

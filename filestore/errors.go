@@ -6,9 +6,9 @@ package filestore
 import "errors"
 
 var (
-	// ErrFileExists is returned by Copy and Move when the destination
-	// filename is already taken. Providers never overwrite an existing
-	// destination implicitly; callers must Purge it first.
+	// ErrFileExists is returned when Copy or Move detects an occupied destination.
+	// Backends may use best-effort probes; this sentinel does not guarantee that
+	// concurrent writes cannot be overwritten after a successful probe.
 	ErrFileExists = errors.New("file already exists")
 
 	// ErrNotFound is returned by Get, Move, Copy and GetPresignedURL when

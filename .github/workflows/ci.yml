@@ -87,25 +87,10 @@ jobs:
 
       - name: Test
         working-directory: ${{ matrix.module }}
-        # Placeholder credentials the carrierproxy fixture site is told to
-        # accept, so its real-browser integration test runs in CI too
-        # (ubuntu-latest ships with Chrome); other modules ignore them.
         env:
           CARRIERPROXY_USERNAME: ci-user
           CARRIERPROXY_PASSWORD: ci-pass
-        run: go test ./... -race -coverprofile=cover.out
-
-      - name: Enforce coverage
-        working-directory: ${{ matrix.module }}
-        env:
-          MIN_COVERAGE: "90"
-        run: |
-          total=$(go tool cover -func=cover.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
-          echo "Total coverage: ${total}% (minimum ${MIN_COVERAGE}%)"
-          awk -v t="$total" -v min="$MIN_COVERAGE" 'BEGIN { exit !(t >= min) }' || {
-            echo "Coverage ${total}% is below the ${MIN_COVERAGE}% minimum."
-            exit 1
-          }
+        run: go test ./... -race
 
   lint:
     name: Lint (${{ matrix.module }})

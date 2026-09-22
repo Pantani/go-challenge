@@ -1,42 +1,60 @@
 package browser
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/gloveboxhq/glovebox-go-code-challenge/carrierproxy"
 )
 
 func TestNewClient(t *testing.T) {
-	t.Parallel()
+	client := NewClient("https://example.com/login", WithTimeout(5*time.Second))
+	if client.loginURL != "https://example.com/login" {
+		t.Fatalf("loginURL = %q", client.loginURL)
+	}
+	if client.opts.timeout != 5*time.Second {
+		t.Fatalf("timeout = %v", client.opts.timeout)
+	}
+	if client.newPage == nil {
+		t.Fatal("newPage is nil")
+	}
+}
 
-	t.Run("uses defaults with no options", func(t *testing.T) {
-		t.Parallel()
-		c := NewClient("https://example.com/login")
-		if c.loginURL != "https://example.com/login" {
-			t.Fatalf("got loginURL %q, want %q", c.loginURL, "https://example.com/login")
-		}
-		if !reflect.DeepEqual(c.opts, newOptions()) {
-			t.Fatalf("got opts %+v, want defaults %+v", c.opts, newOptions())
-		}
-		if c.newPage == nil {
-			t.Fatal("expected newPage to be wired to a browser launcher")
-		}
-		if c.sleep == nil {
-			t.Fatal("expected sleep to be wired to a real delay func")
-		}
-		if c.fetch == nil {
-			t.Fatal("expected fetch to be wired to a real HTTP fetch func")
-		}
-	})
+func TestClientUnsupportedOperations(t *testing.T) {
+	client := NewClient(testLoginURL)
 
-	t.Run("applies given options", func(t *testing.T) {
-		t.Parallel()
-		c := NewClient("https://example.com/login", WithTimeout(5*time.Second), WithUsernameSelector("#u"))
-		if c.opts.timeout != 5*time.Second {
-			t.Fatalf("got timeout %v, want 5s", c.opts.timeout)
-		}
-		if c.opts.usernameSelector != "#u" {
-			t.Fatalf("got usernameSelector %q, want #u", c.opts.usernameSelector)
-		}
-	})
+	if _, err := client.Policies(); !errors.Is(err, carrierproxy.ErrNotImplemented) {
+		t.Fatalf("Policies() error = %v", err)
+	}
+	if body, err := client.DocumentDownload("policy.pdf"); body != nil || !errors.Is(err, carrierproxy.ErrNotImplemented) {
+		t.Fatalf("DocumentDownload() = (%v, %v)", body, err)
+	}
+}
+
+func TestClientLoginClosesPage(t *testing.T) {
+	fake := successPage()
+	closed := false
+	client := NewClient(testLoginURL)
+	client.newPage = func(time.Duration) (page, func(), error) {
+		return fake, func() { closed = true }, nil
+	}
+
+	if err := client.Login("alice", "secret"); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if !closed {
+		t.Fatal("Login() did not close the page")
+	}
+	want := []string{
+		"navigate:" + testLoginURL, "wait-load",
+		"element:#username", "input:#username=alice",
+		"element:#password", "input:#password=secret",
+		"element:button[type='submit']", "click:button[type='submit']",
+		"wait-load", "element:#flash", "attribute:#flash=class",
+	}
+	if !reflect.DeepEqual(fake.events, want) {
+		t.Fatalf("events = %#v, want %#v", fake.events, want)
+	}
 }

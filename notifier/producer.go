@@ -14,16 +14,23 @@ type Producer struct {
 	topicBuilders map[string]TopicRequestBuilder
 }
 
+// ProducerProvider is the producer behavior callers can depend on for injection.
+// Implementations support both topic construction and prebuilt requests.
 type ProducerProvider interface {
 	NotifyTopic(ctx context.Context, topic string, input any) error
 	Notify(ctx context.Context, req Request) error
 }
 
+// TopicRequestBuilder builds delivery requests from a topic's business input.
+// Built-in registration is currently owned by NewProducer; this interface does
+// not imply a public runtime registration API.
 type TopicRequestBuilder interface {
 	Topic() string
 	BuildRequest(ctx context.Context, input any) (Request, error)
 }
 
+// Request contains a prebuilt delivery request. Producers do not deep-copy Vars.
+// Callers retain ownership of nested mutable values and must synchronize access.
 type Request struct {
 	Topic      string
 	Recipients []string
@@ -70,15 +77,13 @@ func (p *Producer) NotifyTopic(ctx context.Context, topic string, input any) err
 	return p.Notify(ctx, req)
 }
 
-// Notify delivers an already-built Request. It refuses to send once ctx is
-// done, when any recipient is blank (ErrMissingRecipients), or when no
-// template is set (ErrMissingTemplate).
+// Notify delivers a validated request through the configured provider.
 func (p *Producer) Notify(ctx context.Context, req Request) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := email.RequireRecipient(req.Recipients); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrMissingRecipients, req.Topic, err)
+		return fmt.Errorf("notify %s: %w: %w", req.Topic, ErrMissingRecipients, err)
 	}
 	if req.Template == "" {
 		return fmt.Errorf("%w: %s", ErrMissingTemplate, req.Topic)

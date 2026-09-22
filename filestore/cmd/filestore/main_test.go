@@ -55,8 +55,8 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the demo did not leave a copy behind: %v", err)
 	}
-	data, _ := io.ReadAll(body)
-	if err := body.Close(); err != nil {
+	data, err := readAndClose(body)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "hello, filestore" || contentType != "text/plain" {

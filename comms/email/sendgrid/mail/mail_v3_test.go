@@ -40,25 +40,22 @@ func TestV3MailBuilder(t *testing.T) {
 		AddPersonalization(p).
 		AddPersonalization(NewPersonalization())
 
-	if string(m.message) != `{"foo":"bar"}` {
-		t.Fatalf("unexpected message %s", m.message)
-	}
-	if m.tplID != "tpl-1" || m.fromName != "Foo Bar" || m.fromAddress != "foo@bar.com" {
-		t.Fatalf("unexpected sender/template fields: %+v", m)
-	}
-	if len(m.personalizations) != 2 {
-		t.Fatalf("expected 2 personalizations, got %d", len(m.personalizations))
-	}
+	checkEqual(t, "message", string(m.message), `{"foo":"bar"}`)
+	checkEqual(t, "template", m.tplID, "tpl-1")
+	checkEqual(t, "sender name", m.fromName, "Foo Bar")
+	checkEqual(t, "sender address", m.fromAddress, "foo@bar.com")
+	checkEqual(t, "personalization count", len(m.personalizations), 2)
 
 	got := m.personalizations[0]
-	if want := []string{"a@bar.com", "b@bar.com", "c@bar.com"}; !reflect.DeepEqual(got.tos, want) {
-		t.Fatalf("expected tos %v, got %v", want, got.tos)
-	}
-	if want := []string{"cc@bar.com"}; !reflect.DeepEqual(got.ccs, want) {
-		t.Fatalf("expected ccs %v, got %v", want, got.ccs)
-	}
-	if want := []string{"bcc@bar.com"}; !reflect.DeepEqual(got.bccs, want) {
-		t.Fatalf("expected bccs %v, got %v", want, got.bccs)
+	checkEqual(t, "to", got.tos, []string{"a@bar.com", "b@bar.com", "c@bar.com"})
+	checkEqual(t, "cc", got.ccs, []string{"cc@bar.com"})
+	checkEqual(t, "bcc", got.bccs, []string{"bcc@bar.com"})
+}
+
+func checkEqual[T any](t *testing.T, label string, got, want T) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v, want %#v", label, got, want)
 	}
 }
 

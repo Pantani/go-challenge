@@ -14,8 +14,9 @@ const DefaultContentType = "application/octet-stream"
 //
 // The Client never hands out the stored object itself: every Get returns a
 // fresh snapshot, so reading or closing one reader cannot disturb the stored
-// bytes or any other reader. A MemoryFile that has been placed in a Bucket
-// must therefore not be written to or closed afterwards.
+// bytes or any other reader. Constructors snapshot seeded MemoryFile values.
+// Callers must not mutate a seed concurrently with construction. A returned
+// reader remains owned by its caller.
 type MemoryFile struct {
 	bytes.Buffer
 

@@ -54,6 +54,10 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 			input:   notifier.PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
 			wantErr: notifier.ErrPolicyRenewalMissingRecipient,
 		},
+		"blank recipient": {
+			input:   notifier.PolicyRenewalInput{Recipient: " \t", PolicyNumber: "POL-123", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingRecipient,
+		},
 		"missing policy number": {
 			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
 			wantErr: notifier.ErrPolicyRenewalMissingPolicyNumber,
@@ -61,6 +65,10 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 		"missing renewal date": {
 			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
 			wantErr: notifier.ErrPolicyRenewalMissingRenewalDate,
+		},
+		"blank policy number": {
+			input:   notifier.PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: " ", RenewalDate: validDate},
+			wantErr: notifier.ErrPolicyRenewalMissingPolicyNumber,
 		},
 	}
 

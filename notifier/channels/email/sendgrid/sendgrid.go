@@ -1,10 +1,11 @@
-// Package sendgrid is the SendGrid-backed email.MailProvider. The outbound
-// call itself is stubbed out in this challenge; request validation is real.
+// Package sendgrid is a local email provider stand-in. It validates requests
+// and configuration but performs no network delivery.
 package sendgrid
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 )
@@ -27,18 +28,16 @@ type Client struct {
 
 func NewSvc(config Config) *Client { return &Client{config: config} }
 
-// Send validates the request the same way the real provider would before the
-// network call: an API key must be configured, every recipient must be
-// non-blank, and a template must be named.
+// Send validates a request. This stand-in performs no network delivery.
 func (c *Client) Send(to []string, tpl email.TplID, _ map[string]any) error {
-	if c.config.APIKey == "" {
-		return ErrMissingAPIKey
+	if strings.TrimSpace(c.config.APIKey) == "" {
+		return fmt.Errorf("sendgrid send: %w", ErrMissingAPIKey)
 	}
 	if err := email.RequireRecipient(to); err != nil {
-		return fmt.Errorf("sendgrid: %w", err)
+		return fmt.Errorf("sendgrid send: %w", err)
 	}
-	if tpl == "" {
-		return ErrMissingTemplate
+	if err := email.RequireTemplate(tpl); err != nil {
+		return fmt.Errorf("sendgrid send: %w: %w", ErrMissingTemplate, err)
 	}
 	return nil
 }

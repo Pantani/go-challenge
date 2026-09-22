@@ -10,11 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
-	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/mockemail"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/handlers"
 )
 
@@ -47,7 +47,7 @@ type handlerCase struct {
 	body         string
 	sendErr      error
 	expectStatus int
-	expectBody   string // exact response body (http.Error appends "\n"); "" skips the check
+	expectBody   string // exact response body, including an empty success body
 	expectTo     string // recorded To recipient on a 200
 	expectCC     []string
 	expectMsg    string
@@ -161,80 +161,86 @@ func commonCases() map[string]handlerCase {
 	}
 }
 
-// runHandlerCases drives every case through the handler built by ctor and
-// asserts on the response and on what the mock provider recorded.
-func runHandlerCases(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc, tpl email.TplID, cases map[string]handlerCase) {
+type deliveryCall struct {
+	to      []string
+	cc      []string
+	message json.RawMessage
+	tpl     email.TplID
+}
+
+type deliverySpy struct {
+	send   []deliveryCall
+	sendCC []deliveryCall
+	err    error
+}
+
+func capturedCall(to, cc []string, message json.RawMessage, tpl email.TplID) deliveryCall {
+	return deliveryCall{slices.Clone(to), slices.Clone(cc), slices.Clone(message), tpl}
+}
+
+func (p *deliverySpy) Send(to []string, message json.RawMessage, tpl email.TplID) error {
+	p.send = append(p.send, capturedCall(to, nil, message, tpl))
+	return p.err
+}
+
+func (p *deliverySpy) SendWithCC(to, cc []string, message json.RawMessage, tpl email.TplID) error {
+	p.sendCC = append(p.sendCC, capturedCall(to, cc, message, tpl))
+	return p.err
+}
+
+func assertEqual(t *testing.T, label string, got, want any) {
 	t.Helper()
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			testEmail := mockemail.NewClient()
-
-			var provider email.MailProvider = testEmail
-			if tc.sendErr != nil {
-				provider = erroringMailProvider{err: tc.sendErr}
-			}
-
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/"+string(tpl), strings.NewReader(tc.body))
-
-			ctor(provider)(w, req)
-
-			resp := w.Result()
-			defer func() { _ = resp.Body.Close() }()
-
-			if resp.StatusCode != tc.expectStatus {
-				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
-			}
-
-			body, _ := io.ReadAll(resp.Body)
-			if tc.expectBody != "" && string(body) != tc.expectBody {
-				t.Fatalf("expected body %q but got %q", tc.expectBody, body)
-			}
-
-			if resp.StatusCode == http.StatusMethodNotAllowed && resp.Header.Get("Allow") != http.MethodPost {
-				t.Fatalf("expected Allow header %q but got %q", http.MethodPost, resp.Header.Get("Allow"))
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				if !testEmail.SendLogs().IsEmpty() {
-					t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
-				}
-				return
-			}
-
-			assertLastSend(t, testEmail, tpl, tc)
-		})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v, want %#v", label, got, want)
 	}
 }
 
-// assertLastSend checks the single send the handler should have recorded.
-func assertLastSend(t *testing.T, testEmail *mockemail.Client, tpl email.TplID, tc handlerCase) {
+func assertHandlerResponse(t *testing.T, w *httptest.ResponseRecorder, tc handlerCase) {
 	t.Helper()
-
-	logs := testEmail.SendLogs()
-	if len(logs) != 1 {
-		t.Fatalf("expected exactly one recorded send but got %d", len(logs))
+	assertEqual(t, "status", w.Code, tc.expectStatus)
+	assertEqual(t, "body", w.Body.String(), tc.expectBody)
+	if tc.expectStatus == http.StatusMethodNotAllowed {
+		assertEqual(t, "Allow", w.Header().Get("Allow"), http.MethodPost)
 	}
+}
 
-	last := logs.Last()
-
-	if last.ExtractTo() != tc.expectTo {
-		t.Fatalf("expected to %q but got %q", tc.expectTo, last.ExtractTo())
+func assertHandlerDelivery(t *testing.T, p *deliverySpy, tpl email.TplID, tc handlerCase) {
+	t.Helper()
+	if tc.sendErr != nil {
+		assertEqual(t, "attempts", len(p.send)+len(p.sendCC), 1)
+		return
 	}
-
-	if !reflect.DeepEqual(last.ExtractCC(), tc.expectCC) {
-		t.Fatalf("expected cc %v but got %v", tc.expectCC, last.ExtractCC())
+	if tc.expectStatus != http.StatusOK {
+		assertEqual(t, "attempts", len(p.send)+len(p.sendCC), 0)
+		return
 	}
-
-	if string(last.ExtractMessage()) != tc.expectMsg {
-		t.Fatalf("expected message %s but got %s", tc.expectMsg, last.ExtractMessage())
+	want := []deliveryCall{capturedCall([]string{tc.expectTo}, tc.expectCC, json.RawMessage(tc.expectMsg), tpl)}
+	if len(tc.expectCC) != 0 {
+		assertEqual(t, "Send", p.send, []deliveryCall(nil))
+		assertEqual(t, "SendWithCC", p.sendCC, want)
+		return
 	}
+	assertEqual(t, "Send", p.send, want)
+	assertEqual(t, "SendWithCC", p.sendCC, []deliveryCall(nil))
+}
 
-	if last.ExtractTplID() != tpl {
-		t.Fatalf("expected tpl %v but got %v", tpl, last.ExtractTplID())
+func runHandlerCase(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc, tpl email.TplID, tc handlerCase) {
+	t.Helper()
+	p := &deliverySpy{err: tc.sendErr}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(tc.method, "/api/comms/"+string(tpl), strings.NewReader(tc.body))
+	ctor(p)(w, req)
+	assertHandlerResponse(t, w, tc)
+	assertHandlerDelivery(t, p, tpl, tc)
+}
+
+func runHandlerCases(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc, tpl email.TplID, cases map[string]handlerCase) {
+	t.Helper()
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runHandlerCase(t, ctor, tpl, tc)
+		})
 	}
 }
 

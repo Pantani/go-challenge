@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 
@@ -33,10 +35,23 @@ func run(ctx context.Context, store filestore.FileProvider) error {
 	if err != nil {
 		return err
 	}
-	data, err := io.ReadAll(body)
+	data, err := readAndClose(body)
 	if err != nil {
 		return err
 	}
 	log.Printf("copied %s to %s: %d bytes (%s)", src, dst, len(data), contentType)
-	return body.Close()
+	return nil
+}
+
+func readAndClose(body io.ReadCloser) ([]byte, error) {
+	data, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	return data, errors.Join(readerError("read", readErr), readerError("close", closeErr))
+}
+
+func readerError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("filestore demo: %s body: %w", op, err)
 }

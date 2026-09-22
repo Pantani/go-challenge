@@ -15,9 +15,7 @@ func TestClientRecordsOneLogPerRecipient(t *testing.T) {
 
 	c := mockemail.NewClient()
 
-	if !c.SendLogs().IsEmpty() {
-		t.Fatalf("expected a fresh client to have no sends")
-	}
+	checkEqual(t, "fresh logs", c.SendLogs().IsEmpty(), true)
 
 	if err := c.Send([]string{"a@bar.com", "b@bar.com"}, json.RawMessage(`{"k":1}`), email.TplAddPolicyVehicle); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -27,33 +25,16 @@ func TestClientRecordsOneLogPerRecipient(t *testing.T) {
 	}
 
 	logs := c.SendLogs()
-	if len(logs) != 3 {
-		t.Fatalf("expected 3 logs but got %d", len(logs))
-	}
-
-	if got := logs[0].ExtractTo(); got != "a@bar.com" {
-		t.Fatalf("expected first to a@bar.com but got %q", got)
-	}
-	if got := logs[0].ExtractCC(); got != nil {
-		t.Fatalf("expected nil cc on plain Send but got %v", got)
-	}
-	if got := logs[1].ExtractTo(); got != "b@bar.com" {
-		t.Fatalf("expected second to b@bar.com but got %q", got)
-	}
+	checkEqual(t, "log count", len(logs), 3)
+	checkEqual(t, "first recipient", logs[0].ExtractTo(), "a@bar.com")
+	checkEqual(t, "first CC", logs[0].ExtractCC(), []string(nil))
+	checkEqual(t, "second recipient", logs[1].ExtractTo(), "b@bar.com")
 
 	last := logs.Last()
-	if last.ExtractTo() != "c@bar.com" {
-		t.Fatalf("expected last to c@bar.com but got %q", last.ExtractTo())
-	}
-	if !reflect.DeepEqual(last.ExtractCC(), []string{"cc@bar.com"}) {
-		t.Fatalf("expected last cc [cc@bar.com] but got %v", last.ExtractCC())
-	}
-	if string(last.ExtractMessage()) != `{"k":2}` {
-		t.Fatalf("expected last message {\"k\":2} but got %s", last.ExtractMessage())
-	}
-	if last.ExtractTplID() != email.TplAddPolicyCoverage {
-		t.Fatalf("expected last tpl %v but got %v", email.TplAddPolicyCoverage, last.ExtractTplID())
-	}
+	checkEqual(t, "last recipient", last.ExtractTo(), "c@bar.com")
+	checkEqual(t, "last CC", last.ExtractCC(), []string{"cc@bar.com"})
+	checkEqual(t, "last message", string(last.ExtractMessage()), `{"k":2}`)
+	checkEqual(t, "last template", last.ExtractTplID(), email.TplAddPolicyCoverage)
 }
 
 func TestLastOnEmptyLogsIsNil(t *testing.T) {
@@ -96,12 +77,8 @@ func TestSendLogsIsASnapshot(t *testing.T) {
 	msg[0] = '['
 
 	first := c.SendLogs()
-	if got := first.Last().ExtractCC(); !reflect.DeepEqual(got, []string{"cc@bar.com"}) {
-		t.Fatalf("client aliased caller's cc slice: %v", got)
-	}
-	if got := first.Last().ExtractMessage(); string(got) != `{"k":1}` {
-		t.Fatalf("client aliased caller's message: %s", got)
-	}
+	checkEqual(t, "input CC snapshot", first.Last().ExtractCC(), []string{"cc@bar.com"})
+	checkEqual(t, "input message snapshot", string(first.Last().ExtractMessage()), `{"k":1}`)
 
 	// mutate what came out of the accessors
 	first.Last().ExtractCC()[0] = "mutated@bar.com"
@@ -109,14 +86,16 @@ func TestSendLogsIsASnapshot(t *testing.T) {
 	first[0] = mockemail.SendLog{}
 
 	second := c.SendLogs()
-	if len(second) != 1 || second.Last().ExtractTo() != "a@bar.com" {
-		t.Fatalf("mutating the returned slice altered the client: %v", second)
-	}
-	if got := second.Last().ExtractCC(); !reflect.DeepEqual(got, []string{"cc@bar.com"}) {
-		t.Fatalf("ExtractCC returned aliased storage: %v", got)
-	}
-	if got := second.Last().ExtractMessage(); string(got) != `{"k":1}` {
-		t.Fatalf("ExtractMessage returned aliased storage: %s", got)
+	checkEqual(t, "snapshot count", len(second), 1)
+	checkEqual(t, "snapshot recipient", second.Last().ExtractTo(), "a@bar.com")
+	checkEqual(t, "accessor CC snapshot", second.Last().ExtractCC(), []string{"cc@bar.com"})
+	checkEqual(t, "accessor message snapshot", string(second.Last().ExtractMessage()), `{"k":1}`)
+}
+
+func checkEqual[T any](t *testing.T, label string, got, want T) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v, want %#v", label, got, want)
 	}
 }
 

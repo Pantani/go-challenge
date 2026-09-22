@@ -36,6 +36,11 @@ var ErrNoAPI = errors.New("no object API configured")
 // Every method operates on a single bucket. Methods that address an existing
 // key must return (an error wrapping) ErrNoSuchKey when that key is absent,
 // except DeleteObject, which, like S3, succeeds for missing keys.
+//
+// The interface has no conditional create or version-aware delete. A Client
+// cannot provide atomic Copy or Move using these methods. Context is forwarded
+// to the adapter, which owns the cancellation behavior of its I/O and returned
+// readers.
 type ObjectAPI interface {
 	// HeadObject checks that key exists.
 	HeadObject(ctx context.Context, bucket, key string) error
@@ -57,9 +62,8 @@ type ObjectAPI interface {
 // Config configures a Client.
 type Config struct {
 	Bucket string
-	// API is the object store to talk to. When nil the Client falls back
-	// to a stand-in that behaves like an empty bucket which discards
-	// writes, so the module can be wired up without credentials.
+	// API is the object store to use. When nil, reads behave as an empty bucket,
+	// Set returns ErrNoAPI, Purge succeeds, and transfers report ErrNotFound.
 	API ObjectAPI
 }
 
@@ -106,9 +110,10 @@ func (c *Client) Purge(ctx context.Context, filename string) error {
 	return opErr("purge", filename, c.api.DeleteObject(ctx, c.bucket, filename))
 }
 
-// Move implements filestore.FileProvider. S3 has no rename, so Move is a
-// Copy followed by deleting the source. Should the delete fail the copy is
-// left in place and the error reported.
+// Move implements filestore.FileProvider with a best-effort Copy followed by
+// source deletion. A failed delete can leave both objects and returns the
+// wrapped adapter error. A concurrent source replacement can also be deleted.
+// There is no rollback: the destination may now belong to another writer.
 func (c *Client) Move(ctx context.Context, oldFilename, newFilename string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -127,10 +132,10 @@ func (c *Client) Copy(ctx context.Context, oldFilename, newFilename string) erro
 	return c.copy(ctx, "copy", oldFilename, newFilename)
 }
 
-// copy performs a conflict-checked CopyObject. S3's CopyObject overwrites
-// silently, so the destination is probed with HeadObject first; a missing
-// source then surfaces from CopyObject itself. The two calls are not atomic:
-// a concurrent writer can still win the race between them.
+// copy probes the destination with HeadObject before CopyObject; a missing
+// source surfaces from CopyObject itself. This destination check is best-effort:
+// the calls are not atomic, and a writer that creates or replaces the destination
+// between them can have its data overwritten by CopyObject.
 func (c *Client) copy(ctx context.Context, op, src, dst string) error {
 	switch err := c.api.HeadObject(ctx, c.bucket, dst); {
 	case err == nil:

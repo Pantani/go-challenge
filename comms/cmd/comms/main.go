@@ -1,6 +1,4 @@
-// Command comms runs the comms REST API. Each route accepts a JSON POST and
-// sends a templated email through sendgrid. See ../../README.md for the
-// challenge this module implements.
+// Command comms runs the comms REST API using a local, non-networking mail stand-in.
 package main
 
 import (
@@ -52,8 +50,7 @@ func loadConfig(getenv func(string) string) config {
 }
 
 // newMux builds the comms API's route table against the given email
-// provider. It is exercised directly by an httptest-backed integration
-// test, without a real network listener or sendgrid credentials.
+// provider. Tests exercise it through httptest.NewServer with a real local listener.
 func newMux(emailsvc email.MailProvider) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/comms/add-policy-vehicle", handlers.AddPolicyVehicle(emailsvc))
@@ -77,8 +74,7 @@ func newServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-// run wires the sendgrid-backed mux into a server and serves it until the
-// listener fails; it only ever returns a non-nil error.
+// run wires the local stand-in provider into the server and returns its listen error.
 func run(cfg config) error {
 
 	// initialize the email service
