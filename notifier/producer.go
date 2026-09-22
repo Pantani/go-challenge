@@ -33,8 +33,9 @@ func NewProducer(emailProvider email.MailProvider) *Producer {
 	return &Producer{
 		email: emailProvider,
 		topicBuilders: map[string]TopicRequestBuilder{
-			docUploadTopicBuilder{}.Topic(): docUploadTopicBuilder{},
-			otpLoginTopicBuilder{}.Topic():  otpLoginTopicBuilder{},
+			docUploadTopicBuilder{}.Topic():     docUploadTopicBuilder{},
+			otpLoginTopicBuilder{}.Topic():      otpLoginTopicBuilder{},
+			policyRenewalTopicBuilder{}.Topic(): policyRenewalTopicBuilder{},
 		},
 	}
 }
