@@ -231,3 +231,27 @@ func runCopyCase(t *testing.T, tc copyCase) {
 		t.Fatalf("expected source content %q but got %q", tc.wantContent, got)
 	}
 }
+
+func TestClientCopyAfterSourceReadAndClose(t *testing.T) {
+	t.Parallel()
+
+	client := newClientWithFiles(t, map[string]string{"source.txt": "abcdef"})
+
+	rc, _, err := client.Get(context.Background(), "source.txt")
+	if err != nil {
+		t.Fatalf("getting source file: %v", err)
+	}
+	if _, err := rc.Read(make([]byte, 2)); err != nil {
+		t.Fatalf("partially reading source file: %v", err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatalf("closing source file: %v", err)
+	}
+
+	if err := client.Copy(context.Background(), "source.txt", "destination.txt"); err != nil {
+		t.Fatalf("unexpected error copying file: %v", err)
+	}
+	if got := readFile(t, client, "destination.txt"); got != "abcdef" {
+		t.Fatalf("expected copied content %q but got %q", "abcdef", got)
+	}
+}

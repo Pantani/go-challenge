@@ -39,7 +39,9 @@ func (c *Client) Get(_ context.Context, filename string) (io.ReadCloser, string,
 	if !ok {
 		return nil, "", errors.New("not found")
 	}
-	return file, "application/octet-stream", nil
+	snapshot := &MemoryFile{}
+	_, _ = snapshot.Write(file.Bytes())
+	return snapshot, "application/octet-stream", nil
 }
 
 func (c *Client) Set(_ context.Context, filename string, fileBytes []byte, _ string) error {
