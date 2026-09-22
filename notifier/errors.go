@@ -6,9 +6,10 @@ import "errors"
 // (and tests) can distinguish failure reasons with errors.Is instead of
 // matching on message text.
 var (
-	ErrTopicNotRegistered = errors.New("topic builder not registered")
-	ErrMissingRecipients  = errors.New("notification requires recipient")
-	ErrMissingTemplate    = errors.New("notification requires template")
+	ErrTopicNotRegistered  = errors.New("topic builder not registered")
+	ErrMissingRecipients   = errors.New("notification requires recipient")
+	ErrMissingTemplate     = errors.New("notification requires template")
+	ErrMissingMailProvider = errors.New("notification requires mail provider")
 
 	ErrInvalidDocumentUploadInput     = errors.New("invalid document upload input type")
 	ErrDocumentUploadMissingRecipient = errors.New("document upload requires recipient")

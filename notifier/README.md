@@ -23,17 +23,21 @@ notifier/
 │   └── main_test.go
 ├── producer.go                        # Producer, ProducerProvider, TopicRequestBuilder, Request,
 │                                      # defaultTopicBuilders() and the generic topicBuilder[T] skeleton
+├── producer_delivery.go               # optional ContextMailProvider, delivery dispatch and nil guard
 ├── errors.go                          # sentinel errors (errors.Is-able) for the producer and each topic
 ├── producer_doc_upload.go             # TopicDocumentUpload + its topic builder
 ├── producer_otp_login.go              # TopicOTPLogin + its topic builder
 ├── producer_policy_renewal.go         # TopicPolicyRenewal + its topic builder
 ├── producer_test.go                   # Producer + doc-upload tests (package notifier_test)
+├── producer_validation_test.go        # nonblank validation, missing providers and original values
+├── producer_delivery_test.go          # context dispatch, cancellation and legacy compatibility
 ├── producer_otp_login_test.go         # otp-login tests
 ├── producer_policy_renewal_test.go    # policy-renewal tests
 └── channels/
     └── email/                         # the MailProvider contract and its implementations
-        ├── email.go                   # MailProvider interface, TplID, template constants, RequireRecipient
-        ├── sendgrid/                  # real implementation (network call stubbed; request validation real)
+        ├── email.go                   # MailProvider, TplID, constants, RequireRecipient and RequireTemplate
+        ├── provider_contract_test.go  # shared provider validation and cancellation contracts
+        ├── sendgrid/                  # local stand-in (validation only; no network delivery)
         └── mockemail/                 # thread-safe in-memory implementation used by the demo and tests
 ```
 
@@ -47,7 +51,17 @@ The policy renewal reminder is added as a new topic, following the same shape as
 * `PolicyRenewalInput{Recipient, PolicyNumber, RenewalDate}` — the typed input. All three fields are required; `RenewalDate` must be a non-zero `time.Time`.
 * `policyRenewalTopicBuilder` — validates the input and builds the email `Request`, passing `policyNumber` and a formatted `renewalDate` (`YYYY-MM-DD`) as template variables.
 
-Every validation failure maps to a sentinel in `errors.go` (`ErrInvalidPolicyRenewalInput`, `ErrPolicyRenewalMissingRecipient`, ...) so callers can branch with `errors.Is`. `Producer.Notify` additionally refuses to send once the context is done, when any recipient is blank (`ErrMissingRecipients`), or when the request names no template (`ErrMissingTemplate`).
+### Validation and delivery contracts
+
+Required recipient, template, document, OTP code, policy number, and SendGrid API-key strings reject values whose `strings.TrimSpace` result is empty. Nonblank values reach the provider unchanged. This is minimum presence validation, not RFC email parsing or verification of deliverability. Sender display-name/address configuration is not newly required.
+
+Validation errors remain classifiable with `errors.Is`. `Producer.Notify` validates the request before checking provider configuration and reports `ErrMissingMailProvider` for nil-interface and typed-nil providers. Pre-canceled contexts are rejected before request validation. The producer retains `ErrMissingRecipients` and `ErrMissingTemplate`; shared provider checks expose `email.ErrMissingRecipient` and `email.ErrMissingTemplate`. SendGrid template failures also retain `sendgrid.ErrMissingTemplate` compatibility.
+
+`email.MailProvider` retains `Send(to, tpl, vars)`. Providers may additionally implement `notifier.ContextMailProvider.SendContext(ctx, to, tpl, vars)`. The producer passes the caller's context to that optional method. Legacy providers remain usable, but an already-running legacy `Send` cannot be interrupted. The bundled mock checks cancellation before validation and again after acquiring its log mutex; mutex acquisition itself is not interruptible, and cancellation racing with a recorded batch does not roll it back. The SendGrid stand-in checks cancellation at entry and performs validation only, with no network delivery.
+
+The mock copies the top-level `Vars` map when recording and when returning logs. Nested maps, slices, and pointers remain caller-owned and shared; synchronize their use and do not treat the log as a deep immutable snapshot. Built-in topic builders currently emit scalar strings and integers only. No reflection-based deep clone is provided.
+
+`ProducerProvider` remains available as an injection contract for callers. `TopicRequestBuilder` describes the topic-construction boundary; registration remains internal to `NewProducer`, with no public dynamic registration API. Existing exported abstractions are retained for source compatibility.
 
 ### Usage
 
@@ -62,18 +76,16 @@ err := producer.NotifyTopic(ctx, notifier.TopicPolicyRenewal, notifier.PolicyRen
 })
 ```
 
-### Running the tests
+### Running tests and the demo
+
+Run these commands from the repository root. The subshells return the caller to the repository root:
 
 ```bash
-go test ./... -v -cover
+(cd notifier && go test -race ./...)
+(cd notifier && go run ./cmd/notifier)
+make check-notifier
+make cover-notifier
+make docker-check-notifier
 ```
 
-`notifier`, `channels/email`, `channels/email/mockemail` and `channels/email/sendgrid` are at 100% statement coverage. The `run(ctx, mail)` tests in `cmd/notifier` cover the demo end to end (success, provider failure via `mockemail.Client.SetSendError`, cancelled context); only `main()`'s `log.Fatal` path is uncovered. CI requires at least 90% per module.
-
-### Running the demo
-
-```bash
-go run ./cmd/notifier
-```
-
-It sends one example notification per registered topic through the in-memory mock and logs how many were recorded.
+Use Go 1.22.3 or newer for direct module commands. The root Makefile provides per-module and Docker alternatives. CI enforces the repository's 90% minimum per module; generated local coverage reports are measurements, not permanent package guarantees. The demo records one example per registered topic in memory.

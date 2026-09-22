@@ -79,7 +79,7 @@ func sendHandler[T any](emailsvc email.MailProvider, tpl email.TplID, extract fu
 			return
 		}
 
-		if err := env.deliver(emailsvc, tpl); err != nil {
+		if err := env.deliver(r.Context(), emailsvc, tpl); err != nil {
 			// Provider failures are an operator concern: log the detail,
 			// never echo it back to the caller.
 			log.Printf("handlers: %s: error sending email: %v", tpl, err)
@@ -181,17 +181,6 @@ func (e envelope) normalize() envelope {
 	e.to = strings.TrimSpace(e.to)
 	e.cc = normalizeCC(e.cc, e.to)
 	return e
-}
-
-// deliver sends the envelope through svc, using SendWithCC only when there
-// are CC recipients left after normalisation.
-func (e envelope) deliver(svc email.MailProvider, tpl email.TplID) error {
-
-	if len(e.cc) == 0 {
-		return svc.Send([]string{e.to}, e.message, tpl)
-	}
-
-	return svc.SendWithCC([]string{e.to}, e.cc, e.message, tpl)
 }
 
 // normalizeCC returns cc trimmed, deduplicated case-insensitively and with

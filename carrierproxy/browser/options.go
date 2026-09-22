@@ -59,11 +59,13 @@ func WithSuccessClass(class string) Option {
 	return func(o *options) { o.successClass = class }
 }
 
-// WithTimeout overrides the time budget for a single attempt (one Login,
-// Policies or DocumentDownload call, one retry not included), covering
-// navigation, form-filling and reading the result. For DocumentDownload
-// the same budget separately bounds the HTTP download, including reading
-// the returned body to its end. Defaults to 30 seconds.
+// WithTimeout overrides the shared time budget for one Login, Policies, or
+// DocumentDownload attempt, excluding later retries. The attempt starts its
+// budget before browser launch and uses it for browser operations and any HTTP
+// download/body reads. A successful document body retains that context until
+// EOF, a read error, Close, or the deadline. Defaults to 30 seconds. Rod
+// v0.116.2 has context-unaware dependency operations, so this is not an
+// absolute wall-clock bound for browser startup or cleanup.
 func WithTimeout(d time.Duration) Option {
 	return func(o *options) { o.timeout = d }
 }
@@ -74,7 +76,9 @@ func WithTimeout(d time.Duration) Option {
 // DocumentDownload. carrierproxy.ErrInvalidCredentials,
 // carrierproxy.ErrMalformedResponse and carrierproxy.ErrNotConfigured are
 // never retried, since the same attempt would just fail again. 0 disables
-// retries. Defaults to 2 (3 attempts total).
+// retries. Negative values retain one-attempt behavior. The maximum
+// representable int returns carrierproxy.ErrNotConfigured because the attempt
+// count would overflow. Defaults to 2 (3 attempts total).
 func WithRetries(n int) Option {
 	return func(o *options) { o.retries = n }
 }
@@ -104,9 +108,13 @@ func WithPolicyCellSelector(selector string) Option {
 	return func(o *options) { o.policyCellSelector = selector }
 }
 
-// WithDocumentURL sets the function DocumentDownload uses to turn a
-// downloadKey into the URL it fetches. Required for DocumentDownload; it
-// returns carrierproxy.ErrNotConfigured without it.
+// WithDocumentURL sets the function DocumentDownload uses to turn an
+// escapedDownloadKey into the URL it fetches. The argument is a
+// url.PathEscape-encoded single path segment; append it directly to a trusted
+// document path without decoding or encoding it again. The callback chooses
+// the origin and can return an unrelated URL, so Client cannot guarantee an
+// origin or path boundary. Required for DocumentDownload, which returns
+// carrierproxy.ErrNotConfigured without it.
 func WithDocumentURL(build func(downloadKey string) string) Option {
 	return func(o *options) { o.documentURL = build }
 }

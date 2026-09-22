@@ -2,7 +2,8 @@ package mockemail
 
 import "github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 
-// SendLog records a single delivery to a single recipient.
+// SendLog records one recipient delivery. Vars is a top-level snapshot only;
+// nested mutable values remain caller-owned.
 type SendLog struct {
 	To   string
 	Tpl  email.TplID

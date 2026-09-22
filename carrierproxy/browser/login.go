@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,11 +19,16 @@ import (
 // success, username/password are remembered so Policies and
 // DocumentDownload can re-authenticate.
 func (c *Client) Login(username, password string) error {
+	return c.LoginContext(context.Background(), username, password)
+}
+
+// LoginContext is Login with caller cancellation.
+func (c *Client) LoginContext(ctx context.Context, username, password string) error {
 	if err := validateCredentials(username, password); err != nil {
 		return err
 	}
 
-	err := c.withRetries(func() error { return c.loginOnce(username, password) })
+	err := c.withRetries(ctx, func(ctx context.Context) error { return c.loginOnce(ctx, username, password) })
 	if err == nil {
 		c.rememberCredentials(username, password)
 	}
@@ -32,8 +38,10 @@ func (c *Client) Login(username, password string) error {
 // loginOnce is a single login attempt: open a fresh page, submit the
 // form, confirm the site accepted it, then release the page. It is the
 // unit of work withRetries repeats.
-func (c *Client) loginOnce(username, password string) error {
-	_, closePage, err := c.authenticatedPage(username, password)
+func (c *Client) loginOnce(ctx context.Context, username, password string) error {
+	ctx, cancel := context.WithTimeout(ctx, c.opts.timeout)
+	defer cancel()
+	_, closePage, err := c.authenticatedPage(ctx, username, password)
 	if err != nil {
 		return err
 	}

@@ -3,8 +3,7 @@ package sendgrid
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
@@ -27,17 +26,24 @@ func (f *fakeMailClient) Send(v3mail *mail.V3Mail) error {
 	return f.err
 }
 
-// assertMailHas fails the test unless fake's last captured message contains
-// want under field (e.g. "tos", "ccs", "tplID"). mail.V3Mail is a vendored
-// stand-in ("please do not modify") with unexported fields and no getters,
-// so this reads them the same way %+v does: through fmt's built-in struct
-// formatting, not unsafe or reflection of our own.
-func assertMailHas(t *testing.T, fake *fakeMailClient, field, want string) {
-	t.Helper()
+type clientSendCase struct {
+	to        []string
+	cc        []string
+	clientErr error
+	wantErr   error
+	wantCalls int
+}
 
-	dump := fmt.Sprintf("%+v", fake.last)
-	if !strings.Contains(dump, field+":"+want) {
-		t.Fatalf("expected %s to be %s, got: %s", field, want, dump)
+func assertGeneratedMail(t *testing.T, got *mail.V3Mail, to, cc []string, msg json.RawMessage, tpl email.TplID) {
+	t.Helper()
+	want := mail.NewV3Mail().
+		SetMessage(msg).
+		SetTemplateID(string(tpl)).
+		SetFromName("Foo Bar").
+		SetFromAddress("foo@bar.com").
+		AddPersonalization(mail.NewPersonalization().AddTos(to...).AddCCs(cc...))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("generated mail: got %+v, want %+v", got, want)
 	}
 }
 
@@ -68,13 +74,7 @@ func TestClientSend(t *testing.T) {
 
 	sendErr := errors.New("send failed")
 
-	testCases := map[string]struct {
-		to        []string
-		cc        []string
-		clientErr error
-		wantErr   error
-		wantCalls int
-	}{
+	testCases := map[string]clientSendCase{
 		"pass": {
 			to:        []string{"foo@bar.com"},
 			wantCalls: 1,
@@ -86,6 +86,11 @@ func TestClientSend(t *testing.T) {
 		},
 		"pass multiple to": {
 			to:        []string{"foo@bar.com", "baz@bar.com"},
+			wantCalls: 1,
+		},
+		"pass recipient prefixes remain distinct": {
+			to:        []string{"foo@bar.com", "foo@bar.com.example"},
+			cc:        []string{"cc@bar.com", "cc@bar.com.example"},
 			wantCalls: 1,
 		},
 		"fail send error": {
@@ -109,40 +114,36 @@ func TestClientSend(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-
-			fake := &fakeMailClient{err: tc.clientErr}
-			c := &Client{client: fake, fromName: "Foo Bar", fromAddress: "foo@bar.com"}
-
-			msg := json.RawMessage(`{"foo":"bar"}`)
-
-			var err error
-			tpl := email.TplAddPolicyVehicle
-			if tc.cc == nil {
-				err = c.Send(tc.to, msg, tpl)
-			} else {
-				tpl = email.TplAddPolicyCoverage
-				err = c.SendWithCC(tc.to, tc.cc, msg, tpl)
-			}
-
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("expected error %v but got %v", tc.wantErr, err)
-			}
-
-			if fake.calls != tc.wantCalls {
-				t.Fatalf("expected %d provider calls but got %d", tc.wantCalls, fake.calls)
-			}
-
-			if tc.wantCalls == 0 {
-				return
-			}
-
-			assertMailHas(t, fake, "tos", fmt.Sprintf("%v", tc.to))
-			assertMailHas(t, fake, "ccs", fmt.Sprintf("%v", tc.cc))
-			assertMailHas(t, fake, "fromName", "Foo Bar")
-			assertMailHas(t, fake, "fromAddress", "foo@bar.com")
-			assertMailHas(t, fake, "tplID", string(tpl))
-			assertMailHas(t, fake, "message", fmt.Sprintf("%v", []byte(msg)))
+			runClientSendCase(t, tc)
 		})
+	}
+}
+
+func runClientSendCase(t *testing.T, tc clientSendCase) {
+	t.Helper()
+	fake := &fakeMailClient{err: tc.clientErr}
+	c := &Client{client: fake, fromName: "Foo Bar", fromAddress: "foo@bar.com"}
+	msg := json.RawMessage(`{"foo":"bar"}`)
+	tpl := email.TplAddPolicyVehicle
+	var err error
+	if tc.cc == nil {
+		err = c.Send(tc.to, msg, tpl)
+	} else {
+		tpl = email.TplAddPolicyCoverage
+		err = c.SendWithCC(tc.to, tc.cc, msg, tpl)
+	}
+	checkEqual(t, "error cause", errors.Is(err, tc.wantErr), true)
+	checkEqual(t, "provider calls", fake.calls, tc.wantCalls)
+	if tc.wantCalls == 0 {
+		return
+	}
+	assertGeneratedMail(t, fake.last, tc.to, tc.cc, msg, tpl)
+}
+
+func checkEqual[T any](t *testing.T, label string, got, want T) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v, want %#v", label, got, want)
 	}
 }
 

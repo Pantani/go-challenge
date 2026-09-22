@@ -45,12 +45,10 @@ func readFile(t *testing.T, store filestore.FileProvider, filename string) (stri
 	if err != nil {
 		t.Fatalf("Get(%q): %v", filename, err)
 	}
-	data, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatalf("reading %q: %v", filename, err)
-	}
-	if err := body.Close(); err != nil {
-		t.Fatalf("closing %q: %v", filename, err)
+	data, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		t.Fatalf("reading and closing %q: %v", filename, err)
 	}
 	return string(data), contentType
 }
@@ -151,28 +149,7 @@ func TestCopy(t *testing.T) {
 	for _, tc := range transferCases {
 		t.Run(tc.name, func(t *testing.T) {
 			forEachProvider(t, func(t *testing.T, store filestore.PresignedFileProvider) {
-				seedTransfer(t, store)
-
-				err := store.Copy(context.Background(), tc.src, tc.dst)
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Copy(%q, %q) error = %v, want %v", tc.src, tc.dst, err, tc.wantErr)
-				}
-				// Pre-existing files are never disturbed.
-				assertFile(t, store, "src.txt", "source", "text/plain")
-				assertFile(t, store, "taken.txt", "taken", "image/png")
-				if tc.wantErr != nil {
-					if tc.dst == "dst.txt" {
-						assertMissing(t, store, tc.dst)
-					}
-					return
-				}
-				assertFile(t, store, tc.dst, "source", "text/plain")
-
-				// The copy is independent of the source.
-				mustSet(t, store, tc.src, "changed", "text/plain")
-				assertFile(t, store, tc.dst, "source", "text/plain")
-				mustPurge(t, store, tc.src)
-				assertFile(t, store, tc.dst, "source", "text/plain")
+				checkCopyCase(t, store, tc)
 			})
 		})
 	}
@@ -182,25 +159,56 @@ func TestMove(t *testing.T) {
 	for _, tc := range transferCases {
 		t.Run(tc.name, func(t *testing.T) {
 			forEachProvider(t, func(t *testing.T, store filestore.PresignedFileProvider) {
-				seedTransfer(t, store)
-
-				err := store.Move(context.Background(), tc.src, tc.dst)
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Move(%q, %q) error = %v, want %v", tc.src, tc.dst, err, tc.wantErr)
-				}
-				assertFile(t, store, "taken.txt", "taken", "image/png")
-				if tc.wantErr != nil {
-					assertFile(t, store, "src.txt", "source", "text/plain")
-					if tc.dst == "dst.txt" {
-						assertMissing(t, store, tc.dst)
-					}
-					return
-				}
-				assertMissing(t, store, tc.src)
-				assertFile(t, store, tc.dst, "source", "text/plain")
+				checkMoveCase(t, store, tc)
 			})
 		})
 	}
+}
+
+func assertTransferFailure(t *testing.T, store filestore.FileProvider, tc transferCase) {
+	t.Helper()
+	assertFile(t, store, "src.txt", "source", "text/plain")
+	if tc.dst == "dst.txt" {
+		assertMissing(t, store, tc.dst)
+	}
+}
+
+func checkCopyCase(t *testing.T, store filestore.PresignedFileProvider, tc transferCase) {
+	t.Helper()
+	seedTransfer(t, store)
+	err := store.Copy(context.Background(), tc.src, tc.dst)
+	if !errors.Is(err, tc.wantErr) {
+		t.Fatalf("Copy error = %v, want %v", err, tc.wantErr)
+	}
+	// Pre-existing files are never disturbed.
+	assertFile(t, store, "src.txt", "source", "text/plain")
+	assertFile(t, store, "taken.txt", "taken", "image/png")
+	if tc.wantErr != nil {
+		assertTransferFailure(t, store, tc)
+		return
+	}
+	assertFile(t, store, tc.dst, "source", "text/plain")
+	// The copy is independent of the source.
+	mustSet(t, store, tc.src, "changed", "text/plain")
+	assertFile(t, store, tc.dst, "source", "text/plain")
+	mustPurge(t, store, tc.src)
+	assertFile(t, store, tc.dst, "source", "text/plain")
+}
+
+func checkMoveCase(t *testing.T, store filestore.PresignedFileProvider, tc transferCase) {
+	t.Helper()
+	seedTransfer(t, store)
+	err := store.Move(context.Background(), tc.src, tc.dst)
+	if !errors.Is(err, tc.wantErr) {
+		t.Fatalf("Move error = %v, want %v", err, tc.wantErr)
+	}
+	assertFile(t, store, "taken.txt", "taken", "image/png")
+	if tc.wantErr != nil {
+		assertTransferFailure(t, store, tc)
+		return
+	}
+	assertMissing(t, store, tc.src)
+	assertFile(t, store, tc.dst, "source", "text/plain")
 }
 
 func TestGetPresignedURL(t *testing.T) {

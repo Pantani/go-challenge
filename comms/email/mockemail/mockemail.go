@@ -3,7 +3,9 @@
 package mockemail
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -28,19 +30,31 @@ func NewClient() *Client {
 
 // Send records a delivery of message to the given to recipients.
 func (c *Client) Send(to []string, message json.RawMessage, tplID email.TplID) error {
-	return c.record(to, nil, message, tplID)
+	return c.SendContext(context.Background(), to, message, tplID)
 }
 
 // SendWithCC behaves like Send but additionally records the given cc
 // recipients on the logged send.
 func (c *Client) SendWithCC(to, cc []string, message json.RawMessage, tplID email.TplID) error {
+	return c.SendWithCCContext(context.Background(), to, cc, message, tplID)
+}
+
+// SendContext checks cancellation before recording a delivery.
+func (c *Client) SendContext(ctx context.Context, to []string, message json.RawMessage, tplID email.TplID) error {
+	return c.SendWithCCContext(ctx, to, nil, message, tplID)
+}
+
+// SendWithCCContext checks cancellation before the synchronous recording operation.
+func (c *Client) SendWithCCContext(ctx context.Context, to, cc []string, message json.RawMessage, tplID email.TplID) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mockemail: record: %w", err)
+	}
 	return c.record(to, cc, message, tplID)
 }
 
 // record appends one SendLog per to recipient, each carrying its own copy
 // of the cc list, message and template for that send.
 func (c *Client) record(to, cc []string, message json.RawMessage, tplID email.TplID) error {
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

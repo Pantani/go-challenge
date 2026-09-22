@@ -6,23 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path"
-	"sync"
 	"time"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/filestore"
 )
 
 var _ filestore.PresignedFileProvider = (*Client)(nil)
-
-// Bucket is the in-memory object store backing a Client.
-type Bucket struct {
-	Name string
-	// Objects may be pre-populated before the Bucket is handed to NewClient.
-	// Once a Client owns it, access it only through the Client, which
-	// serialises access with its own lock.
-	Objects map[string]*MemoryFile
-}
 
 // Config configures a mock Client.
 type Config struct {
@@ -33,27 +22,36 @@ type Config struct {
 
 // Client is an in-memory file store. It is safe for concurrent use.
 type Client struct {
-	mu       sync.RWMutex
-	bucket   Bucket
+	bucket   *SharedBucket
 	basePath string
 }
 
-// NewClient returns a Client backed by config.Bucket, allocating the object
-// map when none was supplied.
+// NewClient snapshots config.Bucket into private client state.
 func NewClient(config Config) *Client {
-	if config.Bucket.Objects == nil {
-		config.Bucket.Objects = map[string]*MemoryFile{}
-	}
-	return &Client{bucket: config.Bucket, basePath: config.BasePath}
+	return NewClientFromSharedBucket(NewSharedBucket(config.Bucket), config.BasePath)
 }
 
-// key maps a filename to its object key. Object keys always use forward
-// slashes regardless of the host OS, like real object stores.
-func (c *Client) key(filename string) string { return path.Join(c.basePath, filename) }
+// NewClientFromSharedBucket attaches to shared; nil creates private state.
+func NewClientFromSharedBucket(shared *SharedBucket, basePath string) *Client {
+	if shared == nil {
+		shared = NewSharedBucket(Bucket{})
+	}
+	shared.initialize()
+	return &Client{bucket: shared, basePath: basePath}
+}
 
-// lookup returns the stored object for filename. The caller must hold c.mu.
+// key maps a filename to its object key. A non-empty base path confines keys
+// by an exact byte prefix; object names are opaque and are never normalized.
+func (c *Client) key(filename string) string {
+	if c.basePath == "" {
+		return filename
+	}
+	return c.basePath + "/" + filename
+}
+
+// lookup returns the stored object for filename. The caller must hold c.bucket.mu.
 func (c *Client) lookup(op, filename string) (*MemoryFile, error) {
-	file, ok := c.bucket.Objects[c.key(filename)]
+	file, ok := c.bucket.objects[c.key(filename)]
 	if !ok {
 		return nil, opErr(op, filename, filestore.ErrNotFound)
 	}
@@ -65,8 +63,8 @@ func (c *Client) Get(ctx context.Context, filename string) (io.ReadCloser, strin
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.bucket.mu.RLock()
+	defer c.bucket.mu.RUnlock()
 	file, err := c.lookup("get", filename)
 	if err != nil {
 		return nil, "", err
@@ -80,9 +78,9 @@ func (c *Client) Set(ctx context.Context, filename string, fileBytes []byte, con
 		return err
 	}
 	file := NewMemoryFile(fileBytes, contentType)
-	c.mu.Lock()
-	c.bucket.Objects[c.key(filename)] = file
-	c.mu.Unlock()
+	c.bucket.mu.Lock()
+	c.bucket.objects[c.key(filename)] = file
+	c.bucket.mu.Unlock()
 	return nil
 }
 
@@ -91,9 +89,9 @@ func (c *Client) Purge(ctx context.Context, filename string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	delete(c.bucket.Objects, c.key(filename))
-	c.mu.Unlock()
+	c.bucket.mu.Lock()
+	delete(c.bucket.objects, c.key(filename))
+	c.bucket.mu.Unlock()
 	return nil
 }
 
@@ -103,12 +101,12 @@ func (c *Client) Move(ctx context.Context, oldFilename, newFilename string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.bucket.mu.Lock()
+	defer c.bucket.mu.Unlock()
 	if err := c.copyLocked("move", oldFilename, newFilename); err != nil {
 		return err
 	}
-	delete(c.bucket.Objects, c.key(oldFilename))
+	delete(c.bucket.objects, c.key(oldFilename))
 	return nil
 }
 
@@ -117,24 +115,24 @@ func (c *Client) Copy(ctx context.Context, oldFilename, newFilename string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.bucket.mu.Lock()
+	defer c.bucket.mu.Unlock()
 	return c.copyLocked("copy", oldFilename, newFilename)
 }
 
 // copyLocked duplicates src to dst as a new, independent object, enforcing
 // the ErrFileExists / ErrNotFound contract with the destination checked
-// first, in the same order as the s3 provider. The caller must hold c.mu for
+// first, in the same order as the s3 provider. The caller must hold c.bucket.mu for
 // writing.
 func (c *Client) copyLocked(op, src, dst string) error {
-	if _, taken := c.bucket.Objects[c.key(dst)]; taken {
+	if _, taken := c.bucket.objects[c.key(dst)]; taken {
 		return opErr(op, dst, filestore.ErrFileExists)
 	}
 	file, err := c.lookup(op, src)
 	if err != nil {
 		return err
 	}
-	c.bucket.Objects[c.key(dst)] = file.snapshot()
+	c.bucket.objects[c.key(dst)] = file.snapshot()
 	return nil
 }
 
@@ -144,8 +142,8 @@ func (c *Client) GetPresignedURL(ctx context.Context, filename string, _ time.Du
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.bucket.mu.RLock()
+	defer c.bucket.mu.RUnlock()
 	if _, err := c.lookup("presign", filename); err != nil {
 		return "", err
 	}

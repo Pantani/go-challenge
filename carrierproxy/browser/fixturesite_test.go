@@ -95,7 +95,9 @@ func (s *fixtureSite) tryLogin(w http.ResponseWriter, r *http.Request) *flash {
 	case password != s.password:
 		return &flash{"error", "Your password is invalid!"}
 	default:
-		http.SetCookie(w, &http.Cookie{Name: "session", Value: s.startSession(), Path: "/"})
+		token := s.startSession()
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: token, Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "document_session", Value: token, Path: "/download"})
 		return &flash{"success", "You logged into a secure area!"}
 	}
 }
@@ -112,7 +114,11 @@ func (s *fixtureSite) startSession() string {
 // authenticated reports whether r carries a session cookie this site
 // started.
 func (s *fixtureSite) authenticated(r *http.Request) bool {
-	c, err := r.Cookie("session")
+	return s.authenticatedCookie(r, "session")
+}
+
+func (s *fixtureSite) authenticatedCookie(r *http.Request, name string) bool {
+	c, err := r.Cookie(name)
 	if err != nil {
 		return false
 	}
@@ -132,7 +138,7 @@ func (s *fixtureSite) handlePolicies(w http.ResponseWriter, r *http.Request) {
 
 // handleDownload serves the fixture document to an authenticated session.
 func (s *fixtureSite) handleDownload(w http.ResponseWriter, r *http.Request) {
-	if !s.authenticated(r) {
+	if !s.authenticatedCookie(r, "document_session") {
 		http.Error(w, "not logged in", http.StatusUnauthorized)
 		return
 	}

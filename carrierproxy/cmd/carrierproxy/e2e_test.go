@@ -25,22 +25,7 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Skip("no local Chrome/Chromium found; skipping the end-to-end CLI test")
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		flash := ""
-		if r.Method == http.MethodPost {
-			if r.FormValue("username") == "e2e-user" && r.FormValue("password") == "e2e-pass" {
-				flash = `<div id="flash" class="flash success">You logged into a secure area!</div>`
-			} else {
-				flash = `<div id="flash" class="flash error">Your username is invalid!</div>`
-			}
-		}
-		_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><body>
-<form method="post" action="/login">
-  <input type="text" name="username" id="username">
-  <input type="password" name="password" id="password">
-  <button type="submit">Login</button>
-</form>%s</body></html>`, flash)
-	}))
+	srv := httptest.NewServer(http.HandlerFunc(serveE2ELogin))
 	t.Cleanup(srv.Close)
 
 	env := func(password string) func(string) string {
@@ -64,4 +49,23 @@ func TestRunEndToEnd(t *testing.T) {
 			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 		}
 	})
+}
+
+func serveE2ELogin(w http.ResponseWriter, r *http.Request) {
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><body>
+<form method="post" action="/login">
+  <input type="text" name="username" id="username">
+  <input type="password" name="password" id="password">
+  <button type="submit">Login</button>
+</form>%s</body></html>`, e2eFlash(r))
+}
+
+func e2eFlash(r *http.Request) string {
+	if r.Method != http.MethodPost {
+		return ""
+	}
+	if r.FormValue("username") != "e2e-user" || r.FormValue("password") != "e2e-pass" {
+		return `<div id="flash" class="flash error">Your username is invalid!</div>`
+	}
+	return `<div id="flash" class="flash success">You logged into a secure area!</div>`
 }

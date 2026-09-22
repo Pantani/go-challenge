@@ -4,6 +4,7 @@
 package browser
 
 import (
+	"context"
 	"io"
 	"sync"
 	"time"
@@ -20,9 +21,9 @@ import (
 type Client struct {
 	loginURL string
 	opts     options
-	newPage  func(time.Duration) (page, func(), error)
-	sleep    func(time.Duration)
-	fetch    func(url string, cookies []cookie, timeout time.Duration) (io.ReadCloser, error)
+	newPage  func(context.Context) (page, func(), error)
+	wait     func(context.Context, time.Duration) error
+	fetch    func(context.Context, string, []cookie) (io.ReadCloser, error)
 
 	mu    sync.Mutex
 	creds *credentials
@@ -46,7 +47,7 @@ func NewClient(loginURL string, opts ...Option) *Client {
 		loginURL: loginURL,
 		opts:     o,
 		newPage:  launchPage,
-		sleep:    time.Sleep,
+		wait:     waitRetry,
 		fetch:    fetchWithCookies,
 	}
 }

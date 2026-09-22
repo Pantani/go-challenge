@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,11 @@ import (
 // and carrierproxy.ErrNotLoggedIn if Login has not yet succeeded. Like
 // Login, transient failures are retried (see WithRetries).
 func (c *Client) Policies() ([]carrierproxy.Policy, error) {
+	return c.PoliciesContext(context.Background())
+}
+
+// PoliciesContext is Policies with caller cancellation.
+func (c *Client) PoliciesContext(ctx context.Context) ([]carrierproxy.Policy, error) {
 	if c.opts.policiesURL == "" {
 		return nil, fmt.Errorf("%w: Policies needs WithPoliciesURL", carrierproxy.ErrNotConfigured)
 	}
@@ -23,16 +29,18 @@ func (c *Client) Policies() ([]carrierproxy.Policy, error) {
 		return nil, err
 	}
 
-	return attemptWithRetries(c, func() ([]carrierproxy.Policy, error) {
-		return c.scrapePolicies(creds)
+	return attemptWithRetries(ctx, c, func(ctx context.Context) ([]carrierproxy.Policy, error) {
+		return c.scrapePolicies(ctx, creds)
 	})
 }
 
 // scrapePolicies is a single Policies attempt: re-authenticate, navigate
 // to the policies page, and parse its rows. It is the unit of work
 // withRetries repeats.
-func (c *Client) scrapePolicies(creds credentials) ([]carrierproxy.Policy, error) {
-	pg, closePage, err := c.authenticatedPage(creds.username, creds.password)
+func (c *Client) scrapePolicies(ctx context.Context, creds credentials) ([]carrierproxy.Policy, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.opts.timeout)
+	defer cancel()
+	pg, closePage, err := c.authenticatedPage(ctx, creds.username, creds.password)
 	if err != nil {
 		return nil, err
 	}

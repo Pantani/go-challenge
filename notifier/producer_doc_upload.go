@@ -1,6 +1,10 @@
 package notifier
 
-import "github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
+import (
+	"strings"
+
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
+)
 
 // TopicDocumentUpload is the notification topic for a newly uploaded document.
 const TopicDocumentUpload = "document-upload"
@@ -20,10 +24,10 @@ var docUploadTopicBuilder = topicBuilder[DocumentUploadInput]{
 }
 
 func buildDocumentUpload(in DocumentUploadInput) (string, map[string]any, error) {
-	if in.Recipient == "" {
+	if strings.TrimSpace(in.Recipient) == "" {
 		return "", nil, ErrDocumentUploadMissingRecipient
 	}
-	if in.Document == "" {
+	if strings.TrimSpace(in.Document) == "" {
 		return "", nil, ErrDocumentUploadMissingDocument
 	}
 	return in.Recipient, map[string]any{"document": in.Document}, nil

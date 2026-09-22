@@ -1,8 +1,9 @@
-// Package sendgrid implements email.MailProvider on top of the sendgrid v3
-// mail client.
+// Package sendgrid implements email.MailProvider using a local SendGrid-shaped
+// stand-in. It does not deliver email over the network.
 package sendgrid
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,8 +32,7 @@ type mailClient interface {
 	Send(v3mail *mail.V3Mail) error
 }
 
-// NewSvc builds a Client that authenticates with cfg.APIKey and sends from
-// cfg.FromName/cfg.FromAddress.
+// NewSvc builds a local stand-in client with the configured sender identity.
 func NewSvc(cfg Config) *Client {
 	return &Client{
 		client:      mail.NewSendClient(cfg.APIKey),
@@ -41,7 +41,7 @@ func NewSvc(cfg Config) *Client {
 	}
 }
 
-// Client is an email.MailProvider backed by the sendgrid v3 mail API.
+// Client constructs mail for the bundled, non-networking stand-in.
 type Client struct {
 	client      mailClient
 	fromAddress string
@@ -52,12 +52,26 @@ var _ email.MailProvider = (*Client)(nil)
 
 // Send delivers message, rendered with tpl, to the given to recipients.
 func (c *Client) Send(to []string, message json.RawMessage, tpl email.TplID) error {
-	return c.send(to, nil, message, tpl)
+	return c.SendContext(context.Background(), to, message, tpl)
 }
 
 // SendWithCC behaves like Send but additionally copies the given cc
 // recipients on the message.
 func (c *Client) SendWithCC(to, cc []string, message json.RawMessage, tpl email.TplID) error {
+	return c.SendWithCCContext(context.Background(), to, cc, message, tpl)
+}
+
+// SendContext checks cancellation before constructing the local stand-in mail.
+func (c *Client) SendContext(ctx context.Context, to []string, message json.RawMessage, tpl email.TplID) error {
+	return c.SendWithCCContext(ctx, to, nil, message, tpl)
+}
+
+// SendWithCCContext checks cancellation before the synchronous stand-in call.
+// The bundled stand-in performs no network delivery.
+func (c *Client) SendWithCCContext(ctx context.Context, to, cc []string, message json.RawMessage, tpl email.TplID) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("sendgrid: send: %w", err)
+	}
 	return c.send(to, cc, message, tpl)
 }
 

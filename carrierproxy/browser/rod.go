@@ -3,7 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
-	"time"
+	"net/url"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -18,7 +18,7 @@ type page interface {
 	WaitLoad() error
 	Element(selector string) (element, error)
 	Elements(selector string) ([]element, error)
-	Cookies() ([]cookie, error)
+	Cookies(targetURL string) ([]cookie, error)
 }
 
 // element is the subset of *rod.Element that this package needs.
@@ -43,14 +43,14 @@ type cookie struct {
 	secure bool
 }
 
-// launchPage starts a headless browser, opens a blank page on it bounded
-// by timeout, and returns it as a page along with a func that releases the
+// launchPage starts a headless browser, opens a blank page using ctx,
+// and returns it as a page along with a func that releases the
 // browser. It prefers a locally installed Chrome/Chromium and only falls
-// back to go-rod's own download when none is found. Together with
-// launchPageWith, it is the only code in this package that talks to
-// go-rod directly.
-func launchPage(timeout time.Duration) (page, func(), error) {
-	return launchPageWith(newLauncher(launcher.LookPath), timeout)
+// back to go-rod's own download when none is found. Rod v0.116.2 does not
+// propagate ctx through control-URL resolution, its browser-download lock, or
+// all provisioning steps, so startup has no absolute wall-clock deadline.
+func launchPage(ctx context.Context) (page, func(), error) {
+	return launchPageWith(ctx, newLauncher(launcher.LookPath))
 }
 
 // newLauncher builds a headless launcher that uses the browser lookPath
@@ -69,8 +69,11 @@ func newLauncher(lookPath func() (string, bool)) *launcher.Launcher {
 // launchPageWith is launchPage against a caller-built launcher, so tests
 // can point it at a binary that fails in a specific way and exercise the
 // cleanup paths without a real browser.
-func launchPageWith(l *launcher.Launcher, timeout time.Duration) (page, func(), error) {
-	controlURL, err := l.Launch()
+func launchPageWith(ctx context.Context, l *launcher.Launcher) (page, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("carrierproxy: launch browser: %w", err)
+	}
+	controlURL, err := l.Context(ctx).Launch()
 	if err != nil {
 		// Launch can fail after it has already started the browser
 		// process (e.g. it started but never reported its DevTools URL);
@@ -79,7 +82,12 @@ func launchPageWith(l *launcher.Launcher, timeout time.Duration) (page, func(), 
 		return nil, nil, fmt.Errorf("carrierproxy: launch browser: %w", err)
 	}
 
-	b := rod.New().ControlURL(controlURL)
+	return connectPage(ctx, l, controlURL)
+}
+
+// connectPage carries the attempt context through the CDP connection and page.
+func connectPage(ctx context.Context, l *launcher.Launcher, controlURL string) (page, func(), error) {
+	b := rod.New().Context(ctx).ControlURL(controlURL)
 	if err := b.Connect(); err != nil {
 		// Launch already started the browser process; Connect merely
 		// failed to dial it, so unlike release (which first asks the
@@ -91,38 +99,36 @@ func launchPageWith(l *launcher.Launcher, timeout time.Duration) (page, func(), 
 
 	rodPg, err := b.Page(proto.TargetCreateTarget{})
 	if err != nil {
-		release(b, l, func() {})
+		release(b, l)
 		return nil, nil, fmt.Errorf("carrierproxy: open page: %w", err)
 	}
 
-	// Every operation on the page shares one deadline, so a selector that
-	// never appears can't stall an attempt past timeout. The cancel is
-	// handed to release so the timer is freed as soon as the attempt ends
-	// rather than lingering until the deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	return rodPage{p: rodPg.Context(ctx)}, func() { release(b, l, cancel) }, nil
+	return rodPage{p: rodPg.Context(ctx)}, func() { release(b, l) }, nil
 }
 
 // release shuts the browser down and frees everything a successful launch
 // holds: it asks the browser to exit over CDP, falls back to killing the
 // process if that request can't be delivered (a dead connection would
 // otherwise leave Cleanup waiting forever for an exit that never comes),
-// then waits for the exit and removes the temporary profile directory
-// Launch created — b.Close() alone leaves that directory behind. cancel
-// releases the page's timeout context.
-func release(b *rod.Browser, l *launcher.Launcher, cancel context.CancelFunc) {
-	defer cancel()
-	if err := b.Close(); err != nil {
-		l.Kill()
-	}
-	l.Cleanup()
+// then asks Rod to wait for process exit and remove the temporary profile
+// Launch created. Graceful CDP shutdown has an independent two-second context,
+// but Rod's CDP Send performs a context-unaware websocket Write before it
+// observes that deadline, so it is not an absolute socket-write bound. After
+// Close reports failure or timeout, shutdown kills the launcher before cleanup.
+// Rod's kill, process reaping, and profile cleanup are context-unaware, so final
+// cleanup remains best-effort without an absolute deadline; profile removal is
+// attempted, not an observable guarantee.
+func release(b *rod.Browser, l *launcher.Launcher) {
+	shutdownBrowser(func(ctx context.Context) error {
+		return b.Context(ctx).Close()
+	}, l.Kill, l.Cleanup)
 }
 
-// killAndCleanup kills the process l started, if any, and removes its
-// temporary profile directory. l.PID() is 0 until Launch actually starts
-// a process, so a pre-start failure (the browser binary missing, say)
-// leaves nothing to kill; calling Cleanup in that case would block
-// forever waiting for an exit that will never come, so it's skipped too.
+// killAndCleanup kills the process l started, if any, then asks Rod to wait for
+// process exit and remove its temporary profile. l.PID() is 0 until Launch
+// actually starts a process, so a pre-start failure (the browser binary
+// missing, say) leaves nothing to kill; calling Cleanup in that case would
+// block forever waiting for an exit that will never come, so it's skipped too.
 func killAndCleanup(l *launcher.Launcher) {
 	if l.PID() == 0 {
 		return
@@ -160,13 +166,21 @@ func (r rodPage) Elements(selector string) ([]element, error) {
 	return wrapElements(els), nil
 }
 
-// Cookies returns the session cookies for the page's current URL, which
-// DocumentDownload attaches to its plain HTTP request to reuse the
-// authenticated session.
-func (r rodPage) Cookies() ([]cookie, error) {
-	raw, err := r.p.Cookies(nil)
+// Cookies returns the session cookies applicable to targetURL, which
+// DocumentDownload attaches to its HTTP request to reuse the authenticated
+// session. Chrome 153 did not distinguish host-only and domain cookies on
+// localhost, so the download jar withholds cookies from other hostnames.
+// Original domains are preserved here; the download jar encodes scope only in
+// its internal keys to retain same-name/path cookies and standard global order.
+// Original names, path and secure restrictions are retained on HTTP requests,
+// but the host boundary can lose continuity on a cross-subdomain redirect.
+func (r rodPage) Cookies(targetURL string) ([]cookie, error) {
+	raw, err := r.p.Cookies([]string{targetURL})
 	if err != nil {
 		return nil, err
+	}
+	if _, err := url.Parse(targetURL); err != nil {
+		return nil, fmt.Errorf("carrierproxy: parse cookie target: %w", err)
 	}
 	cookies := make([]cookie, len(raw))
 	for i, c := range raw {
@@ -206,8 +220,8 @@ func (r rodElement) Elements(selector string) ([]element, error) {
 	return wrapElements(els), nil
 }
 
-// Attribute flattens *rod.Element's *string result (nil when the attribute
-// is absent) into a plain string, since callers only care about substrings.
+// Attribute flattens *rod.Element's *string result; absent attributes become
+// an empty string, and login evaluates whole class tokens.
 func (r rodElement) Attribute(name string) (string, error) {
 	val, err := r.el.Attribute(name)
 	if err != nil {

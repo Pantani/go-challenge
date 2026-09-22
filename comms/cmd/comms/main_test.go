@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -65,24 +66,11 @@ func TestRoutes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
 			}
-			defer func() { _ = resp.Body.Close() }()
+			defer closeResource(t, resp.Body)
 
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("expected status %v but got %v", http.StatusOK, resp.StatusCode)
-			}
-
-			last := testEmail.SendLogs().Last()
-			if last == nil {
-				t.Fatalf("expected an email to be sent")
-			}
-
-			if got := last.ExtractTplID(); got != tc.expectTplID {
-				t.Fatalf("expected tpl %v but got %v", tc.expectTplID, got)
-			}
-
-			if got := last.ExtractCC(); strings.Join(got, ",") != strings.Join(tc.expectCC, ",") {
-				t.Fatalf("expected cc %v but got %v", tc.expectCC, got)
-			}
+			checkEqual(t, "status", resp.StatusCode, http.StatusOK)
+			checkEqual(t, "empty success body", readResponse(t, resp), "")
+			assertRouteMail(t, testEmail.SendLogs(), tc.expectTplID, tc.expectCC)
 		})
 	}
 }
@@ -105,6 +93,7 @@ func TestRoutesRejections(t *testing.T) {
 			path:         "/api/comms/unknown-route",
 			body:         `{}`,
 			expectStatus: http.StatusNotFound,
+			expectBody:   "404 page not found\n",
 		},
 		"wrong method": {
 			method:       http.MethodGet,
@@ -139,22 +128,46 @@ func TestRoutesRejections(t *testing.T) {
 			if err != nil {
 				t.Fatalf("request failed: %v", err)
 			}
-			defer func() { _ = resp.Body.Close() }()
+			defer closeResource(t, resp.Body)
 
-			if resp.StatusCode != tc.expectStatus {
-				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
-			}
-
-			body, _ := io.ReadAll(resp.Body)
-			if tc.expectBody != "" && string(body) != tc.expectBody {
-				t.Fatalf("expected body %q but got %q", tc.expectBody, body)
-			}
-
-			if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
-			}
+			checkEqual(t, "status", resp.StatusCode, tc.expectStatus)
+			checkEqual(t, "body", readResponse(t, resp), tc.expectBody)
+			checkEqual(t, "rejected request delivery count", len(testEmail.SendLogs()), 0)
 		})
 	}
+}
+
+func checkEqual[T any](t *testing.T, label string, got, want T) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: got %#v, want %#v", label, got, want)
+	}
+}
+
+func readResponse(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	return string(body)
+}
+
+func closeResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Errorf("close resource: %v", err)
+	}
+}
+
+func assertRouteMail(t *testing.T, logs mockemail.SendLogs, tpl email.TplID, cc []string) {
+	t.Helper()
+	checkEqual(t, "delivery count", len(logs), 1)
+	last := logs.Last()
+	checkEqual(t, "recipient", last.ExtractTo(), "foo@bar.com")
+	checkEqual(t, "template", last.ExtractTplID(), tpl)
+	checkEqual(t, "CC", last.ExtractCC(), cc)
+	checkEqual(t, "message", string(last.ExtractMessage()), `{"foo":"bar"}`)
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -256,7 +269,7 @@ func TestRunReturnsListenError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserving a port: %v", err)
 	}
-	defer func() { _ = ln.Close() }()
+	defer closeResource(t, ln)
 
 	cfg := loadConfig(func(string) string { return "" })
 	cfg.addr = ln.Addr().String()

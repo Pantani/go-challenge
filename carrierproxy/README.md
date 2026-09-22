@@ -34,7 +34,7 @@ All three `PolicyProvider` methods, using go-rod:
 
 * **`Login`** fills in the login form (clearing anything pre-filled first), submits it and classifies the result.
 * **`Policies`** logs in again, opens a configured page and reads each row's first two cells as `CarrierID`/`PolicyNumber`.
-* **`DocumentDownload`** logs in again, then downloads a configured URL over plain HTTP using the browser session's cookies.
+* **`DocumentDownload`** logs in again, then downloads a configured URL with Go's HTTP client using cookies from the browser session.
 
 `Policies` and `DocumentDownload` need their own URL options and a prior successful `Login`.
 
@@ -42,7 +42,10 @@ All three `PolicyProvider` methods, using go-rod:
 
 * **Retries.** Transient failures are retried `WithRetries` more times (default 2), `WithRetryDelay` apart (default 1s). `ErrInvalidCredentials`, `ErrMalformedResponse` and `ErrNotConfigured` are never retried, since another attempt would fail the same way; retrying bad credentials could also trip a lockout. The policy lives in `Client.withRetries` (`browser/session.go`).
 * **Fresh attempts.** Each attempt, retries included, uses a new browser page and a new login, so nothing from a failed attempt carries over.
-* **Cleanup.** Every attempt releases its browser before returning: it asks the browser to exit, kills it if that fails, and removes the temporary profile directory.
+* **Context-aware calls.** `LoginContext`, `PoliciesContext`, and `DocumentDownloadContext` accept caller cancellation. The original `PolicyProvider` methods remain available and use `context.Background()`. A canceled caller stops retries and interrupts retry delays. Each attempt starts its configured timeout before browser launch and shares it with browser operations and HTTP download/body reads. A successful document body keeps that attempt context until EOF, a read error, `Close`, or its deadline. The caller must always close the returned body.
+* **Cleanup.** Each attempt releases its browser before returning its result. CDP shutdown uses an independent two-second context; a failure or an observed timeout triggers launcher kill before process-exit cleanup. Rod v0.116.2 performs the websocket write for a CDP command before observing the context deadline, so that context is not an absolute bound on the socket write. Rod also includes context-unaware launch URL resolution, a browser-download lock, process waiting, and filesystem cleanup, so `WithTimeout` is not an absolute wall-clock bound for those dependency operations. Profile removal is attempted by Rod and is not an observable guarantee of successful deletion.
+* **Document URL builders.** The `WithDocumentURL` callback receives a `url.PathEscape`-encoded single path segment after the client rejects empty, dot, dot-dot, slash, and backslash keys. Append that segment directly to a trusted document path without decoding or encoding it again. The callback is application code: it chooses the target origin and can return an unrelated URL. The client does not guarantee that an arbitrary callback preserves an origin or path boundary.
+* **Cookie scope.** Cookie extraction uses the document target URL. Transfers preserve original domain identities and encode host-only/domain scope only in the standard jar's internal keys, so same-name/path cookies remain distinct even on the exact same hostname. Original cookie names are restored before sending; there is no public name change. One standard jar handles normalized domains, path, Secure, expiry, and global ordering by path specificity then creation order; response `Set-Cookie` updates retain the matching scope. Chrome 153 did not distinguish host-only and domain cookies on `localhost`, so the approved fallback returns cookies only when the request hostname exactly matches the original document target hostname. Same-host redirects retain applicable cookies, but cross-subdomain redirects can lose session continuity because cookies are withheld from every other hostname.
 * **Concurrency.** A `Client` is safe for concurrent use; the only shared state is the remembered credentials, guarded by a mutex. `TestClientLoginConcurrentSafety` runs 20 concurrent logins under `-race`.
 * **Errors** are wrapped with `%w`, so callers can use `errors.Is` with `carrierproxy.ErrInvalidCredentials`, `ErrNotLoggedIn`, `ErrNotConfigured`, or `context.DeadlineExceeded` (a selector didn't appear within `WithTimeout`).
 
@@ -66,8 +69,8 @@ client := browser.NewClient(
     browser.WithPoliciesURL("https://your-target-site.example/policies"),
     browser.WithPolicyRowSelector(".policy-row"), // default: "tr"
     browser.WithPolicyCellSelector(".cell"),      // default: "td"
-    browser.WithDocumentURL(func(downloadKey string) string {
-        return "https://your-target-site.example/documents/" + downloadKey
+    browser.WithDocumentURL(func(escapedDownloadKey string) string {
+        return "https://your-target-site.example/documents/" + escapedDownloadKey
     }),
 )
 ```
@@ -78,7 +81,9 @@ go-rod is isolated behind two small interfaces, `page` and `element`, in `browse
 
 `launchPage` uses a locally installed Chrome/Chromium when one exists and otherwise lets go-rod download one (cached under `~/.cache/rod`).
 
-Functions stay within the repo's complexity limits (cyclomatic ≤ 6, cognitive ≤ 8), enforced in CI:
+The shared lint configuration enforces the repository's complexity limits for all production and test functions: cyclomatic ≤ 6 and cognitive ≤ 10.
+
+Run the shared lint check from the carrierproxy module directory:
 
 ```bash
 golangci-lint run --config ../.golangci-complexity.yml ./...
@@ -94,15 +99,38 @@ CARRIERPROXY_USERNAME=tomsmith CARRIERPROXY_PASSWORD='SuperSecretPassword!' go r
 
 Both variables are required. On success it prints `login to <url> succeeded as <username>`; on failure it logs the error and exits non-zero.
 
-From your own code:
+From your own code, use these imports:
 
 ```go
-client := browser.NewClient("https://your-target-site.example/login" /* , options */)
-if err := client.Login(username, password); err != nil {
-    // errors.Is(err, carrierproxy.ErrInvalidCredentials): the site rejected them.
+import (
+    "context"
+    "io"
+    "time"
+
+    "github.com/gloveboxhq/glovebox-go-code-challenge/carrierproxy/browser"
+)
+```
+
+The following snippet is the body of an error-returning consumer function; its caller supplies `username`, `password`, and `destination io.Writer`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+defer cancel()
+client := browser.NewClient("https://your-target-site.example/login",
+    browser.WithDocumentURL(func(escapedDownloadKey string) string {
+        return "https://your-target-site.example/documents/" + escapedDownloadKey
+    }),
+)
+if err := client.LoginContext(ctx, username, password); err != nil {
+    return err
 }
-policies, err := client.Policies()                   // needs WithPoliciesURL
-doc, err := client.DocumentDownload("policy-42.pdf") // needs WithDocumentURL
+body, err := client.DocumentDownloadContext(ctx, "policy-42.pdf")
+if err != nil {
+    return err
+}
+defer func() { _ = body.Close() }()
+_, err = io.Copy(destination, body)
+return err
 ```
 
 ## Testing
@@ -113,7 +141,7 @@ go test ./...
 
 Needs no network. Tests that need a browser skip themselves when no local Chrome/Chromium is found. CI runs `go test ./... -race` and requires at least 90% coverage per module.
 
-* **Unit tests** cover the login, policies, documents, session and options logic at 100% using fake pages, and `run()` using a fake `PolicyProvider`.
+* **Unit tests** cover login, policies, documents, session and options behavior using fake pages, and `run()` using a fake `PolicyProvider`.
 * **`browser/rod_test.go`** covers the go-rod adapter: launch-failure cleanup (no browser needed), and every `rodPage`/`rodElement` method against a real headless browser, including their timeout errors.
 * **`cmd/carrierproxy/e2e_test.go`** runs the CLI's `run` through a real browser against a local login page.
 * **`browser/integration_test.go`** runs only when `CARRIERPROXY_USERNAME` and `CARRIERPROXY_PASSWORD` are set (CI sets placeholders). It drives a real browser against a local fixture site (`browser/testdata/`) that accepts exactly those credentials:
@@ -123,5 +151,3 @@ Needs no network. Tests that need a browser skip themselves when no local Chrome
   ```
 
   It checks that valid credentials log in and invalid ones fail without retrying, that a missing selector times out with `context.DeadlineExceeded`, that an unreachable host fails, and that `Policies`/`DocumentDownload` return `ErrNotLoggedIn` before login and real data after it. It uses a local site rather than the public demo so the tests don't depend on a third-party site staying up.
-
-Only `main()` itself is left uncovered.

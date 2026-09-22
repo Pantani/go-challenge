@@ -14,6 +14,44 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 )
 
+func TestCanceledLaunchNeverStartsProcess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	l := launcher.New().Bin("/nonexistent/carrierproxy-test-chrome")
+	pg, closePage, err := launchPageWith(ctx, l)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if pg != nil {
+		t.Fatal("unexpected page")
+	}
+	if closePage != nil {
+		t.Fatal("unexpected release function")
+	}
+	if l.PID() != 0 {
+		t.Fatalf("unexpected process %d", l.PID())
+	}
+}
+
+func TestRodCallerCancellation(t *testing.T) {
+	requireBrowser(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	srv := newAdapterSite(t)
+	pg, closePage, err := launchPage(ctx)
+	if err != nil {
+		t.Fatalf("launch page: %v", err)
+	}
+	t.Cleanup(closePage)
+	if err := pg.Navigate(srv.URL); err != nil {
+		t.Fatalf("navigate: %v", err)
+	}
+	cancel()
+	if _, err := pg.Element("#does-not-exist"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 // TestLaunchPageWithFailedLaunch covers launchPageWith's launch-failure
 // cleanup without a real browser, by pointing the launcher at binaries that
 // fail in the two ways that matter to killAndCleanup: one that never
@@ -34,29 +72,41 @@ func TestLaunchPageWithFailedLaunch(t *testing.T) {
 
 	for name, bin := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				pg, release, err := launchPageWith(launcher.New().Headless(true).Bin(bin), time.Second)
-				if err == nil || !strings.Contains(err.Error(), "launch browser") {
-					t.Errorf("expected a launch browser error, got %v", err)
-				}
-				if pg != nil || release != nil {
-					t.Errorf("expected no page and no release func on failure, got %v, %v", pg, release != nil)
-				}
-			}()
-
-			// Generous on purpose: go-rod serializes launches (and browser
-			// downloads) across processes on a shared lock port, so a
-			// concurrent browser test can delay this one without it hanging.
-			select {
-			case <-done:
-			case <-time.After(2 * time.Minute):
-				t.Fatal("launchPageWith hung cleaning up after a failed launch")
-			}
+			assertFailedLaunch(t, bin)
 		})
+	}
+}
+
+func assertFailedLaunch(t *testing.T, bin string) {
+	t.Helper()
+	t.Parallel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		checkFailedLaunch(t, bin)
+	}()
+	// Join even on failure; the test-process timeout is the final bound.
+	defer func() { <-done }()
+	// Generous on purpose: go-rod serializes launches (and browser
+	// downloads) across processes on a shared lock port, so a
+	// concurrent browser test can delay this one without it hanging.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Minute):
+		t.Fatal("launchPageWith hung cleaning up after a failed launch")
+	}
+}
+
+func checkFailedLaunch(t *testing.T, bin string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pg, release, err := launchPageWith(ctx, launcher.New().Headless(true).Bin(bin))
+	if err == nil || !strings.Contains(err.Error(), "launch browser") {
+		t.Errorf("expected a launch browser error, got %v", err)
+	}
+	if pg != nil || release != nil {
+		t.Errorf("expected no page and no release func on failure, got %v, %v", pg, release != nil)
 	}
 }
 
@@ -125,10 +175,12 @@ func requireBrowser(t *testing.T) {
 func TestRodAdapter(t *testing.T) {
 	t.Parallel()
 	requireBrowser(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
 
 	srv := newAdapterSite(t)
 
-	pg, release, err := launchPage(30 * time.Second)
+	pg, release, err := launchPage(ctx)
 	if err != nil {
 		t.Fatalf("launch page: %v", err)
 	}
@@ -142,88 +194,117 @@ func TestRodAdapter(t *testing.T) {
 	}
 
 	t.Run("Input, Click and Text", func(t *testing.T) {
-		if err := mustElement(t, pg, "#name").Input("hello"); err != nil {
-			t.Fatalf("input: %v", err)
-		}
-		if err := mustElement(t, pg, "#btn").Click(); err != nil {
-			t.Fatalf("click: %v", err)
-		}
-		got, err := mustElement(t, pg, "#out").Text()
-		if err != nil {
-			t.Fatalf("text: %v", err)
-		}
-		if got != "clicked:hello" {
-			t.Fatalf("got text %q, want %q", got, "clicked:hello")
-		}
+		testRodAdapterInputClickText(t, pg)
 	})
 
 	t.Run("Attribute present and absent", func(t *testing.T) {
-		link := mustElement(t, pg, "#link")
-		if got, err := link.Attribute("data-kind"); err != nil || got != "policy" {
-			t.Fatalf("got (%q, %v), want (%q, nil)", got, err, "policy")
-		}
-		if got, err := link.Attribute("data-missing"); err != nil || got != "" {
-			t.Fatalf("got (%q, %v) for a missing attribute, want (\"\", nil)", got, err)
-		}
+		testRodAdapterAttributes(t, pg)
 	})
 
 	t.Run("page and element Elements", func(t *testing.T) {
-		rows, err := pg.Elements("tr.row")
-		if err != nil {
-			t.Fatalf("elements: %v", err)
-		}
-		var got []string
-		for _, row := range rows {
-			cells, err := row.Elements("td")
-			if err != nil {
-				t.Fatalf("row elements: %v", err)
-			}
-			for _, cell := range cells {
-				text, err := cell.Text()
-				if err != nil {
-					t.Fatalf("cell text: %v", err)
-				}
-				got = append(got, text)
-			}
-		}
-		if strings.Join(got, ",") != "a,b,c,d" {
-			t.Fatalf("got cells %v, want [a b c d]", got)
-		}
-
-		none, err := pg.Elements(".does-not-exist")
-		if err != nil || len(none) != 0 {
-			t.Fatalf("got (%d elements, %v), want (0, nil)", len(none), err)
-		}
+		testRodAdapterElements(t, pg)
 	})
 
 	t.Run("Cookies keep their scoping attributes", func(t *testing.T) {
-		cookies, err := pg.Cookies()
-		if err != nil {
-			t.Fatalf("cookies: %v", err)
-		}
-		for _, c := range cookies {
-			if c.name == "session" {
-				if c.value != "abc" || c.domain != "127.0.0.1" || c.path != "/" || c.secure {
-					t.Fatalf("unexpected session cookie %+v", c)
-				}
-				return
-			}
-		}
-		t.Fatalf("session cookie not found in %+v", cookies)
+		testRodAdapterCookies(t, pg, srv.URL)
 	})
 }
 
+func testRodAdapterInputClickText(t *testing.T, pg page) {
+	if err := mustElement(t, pg, "#name").Input("hello"); err != nil {
+		t.Fatalf("input: %v", err)
+	}
+	if err := mustElement(t, pg, "#btn").Click(); err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	got, err := mustElement(t, pg, "#out").Text()
+	if err != nil {
+		t.Fatalf("text: %v", err)
+	}
+	if got != "clicked:hello" {
+		t.Fatalf("got text %q, want %q", got, "clicked:hello")
+	}
+}
+
+func testRodAdapterAttributes(t *testing.T, pg page) {
+	link := mustElement(t, pg, "#link")
+	if got, err := link.Attribute("data-kind"); err != nil || got != "policy" {
+		t.Fatalf("got (%q, %v), want (%q, nil)", got, err, "policy")
+	}
+	if got, err := link.Attribute("data-missing"); err != nil || got != "" {
+		t.Fatalf("got (%q, %v) for a missing attribute, want (\"\", nil)", got, err)
+	}
+}
+
+func testRodAdapterElements(t *testing.T, pg page) {
+	rows, err := pg.Elements("tr.row")
+	if err != nil {
+		t.Fatalf("elements: %v", err)
+	}
+	var got []string
+	for _, row := range rows {
+		got = append(got, adapterCellTexts(t, row)...)
+	}
+	if strings.Join(got, ",") != "a,b,c,d" {
+		t.Fatalf("got cells %v, want [a b c d]", got)
+	}
+	assertAdapterEmptySelector(t, pg)
+}
+
+func assertAdapterEmptySelector(t *testing.T, pg page) {
+	t.Helper()
+	none, err := pg.Elements(".does-not-exist")
+	if err != nil || len(none) != 0 {
+		t.Fatalf("got (%d elements, %v), want (0, nil)", len(none), err)
+	}
+}
+
+func testRodAdapterCookies(t *testing.T, pg page, targetURL string) {
+	cookies, err := pg.Cookies(targetURL)
+	if err != nil {
+		t.Fatalf("cookies: %v", err)
+	}
+	assertAdapterCookies(t, cookies)
+}
+
+func adapterCellTexts(t *testing.T, row element) []string {
+	t.Helper()
+	cells, err := row.Elements("td")
+	if err != nil {
+		t.Fatalf("row elements: %v", err)
+	}
+	result := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		text, err := cell.Text()
+		if err != nil {
+			t.Fatalf("cell text: %v", err)
+		}
+		result = append(result, text)
+	}
+	return result
+}
+
+func assertAdapterCookies(t *testing.T, cookies []cookie) {
+	t.Helper()
+	c := cookieByName(t, cookies, "session")
+	if c.value != "abc" || c.domain != "127.0.0.1" || c.path != "/" || c.secure {
+		t.Fatalf("unexpected session cookie %+v", c)
+	}
+}
+
 // TestRodAdapterErrors checks every adapter method surfaces go-rod's error
-// once the page's timeout (set by launchPage) has expired, which is how a
+// once the caller's timeout has expired, which is how a
 // slow or broken site shows up in practice. It is skipped when no browser
 // is installed.
 func TestRodAdapterErrors(t *testing.T) {
 	t.Parallel()
 	requireBrowser(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
 
 	srv := newAdapterSite(t)
 
-	pg, release, err := launchPage(5 * time.Second)
+	pg, release, err := launchPage(ctx)
 	if err != nil {
 		t.Fatalf("launch page: %v", err)
 	}
@@ -244,7 +325,7 @@ func TestRodAdapterErrors(t *testing.T) {
 		"page Navigate": func() error { return pg.Navigate(srv.URL) },
 		"page WaitLoad": pg.WaitLoad,
 		"page Elements": func() error { _, err := pg.Elements("a"); return err },
-		"page Cookies":  func() error { _, err := pg.Cookies(); return err },
+		"page Cookies":  func() error { _, err := pg.Cookies(srv.URL); return err },
 		"element Input": func() error { return link.Input("x") },
 		"element Click": link.Click,
 		"element Text":  func() error { _, err := link.Text(); return err },

@@ -13,6 +13,7 @@ type PolicyProvider interface {
 	Login(username, password string) error
 	// Policies lists the policies available to the authenticated user.
 	Policies() ([]Policy, error)
-	// DocumentDownload retrieves the document identified by downloadKey.
+	// DocumentDownload retrieves the document identified by downloadKey. The
+	// caller must always close the returned body.
 	DocumentDownload(downloadKey string) (io.ReadCloser, error)
 }

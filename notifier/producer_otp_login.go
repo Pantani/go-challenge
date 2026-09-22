@@ -1,6 +1,10 @@
 package notifier
 
-import "github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
+import (
+	"strings"
+
+	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
+)
 
 // TopicOTPLogin is the notification topic for one-time login codes.
 const TopicOTPLogin = "otp-login"
@@ -21,10 +25,10 @@ var otpLoginTopicBuilder = topicBuilder[OTPLoginInput]{
 }
 
 func buildOTPLogin(in OTPLoginInput) (string, map[string]any, error) {
-	if in.Recipient == "" {
+	if strings.TrimSpace(in.Recipient) == "" {
 		return "", nil, ErrOTPLoginMissingRecipient
 	}
-	if in.OTPCode == "" {
+	if strings.TrimSpace(in.OTPCode) == "" {
 		return "", nil, ErrOTPLoginMissingCode
 	}
 	if in.ExpirationMins <= 0 {

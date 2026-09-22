@@ -24,32 +24,38 @@ func TestMailProviderContract(t *testing.T) {
 		"mockemail": func() email.MailProvider { return mockemail.NewClient() },
 	}
 
-	tpls := []email.TplID{
+	for name, newProvider := range providers {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			checkProviderTemplates(t, newProvider)
+		})
+	}
+}
+
+func checkProviderTemplates(t *testing.T, newProvider func() email.MailProvider) {
+	t.Helper()
+	templates := []email.TplID{
 		email.TplAddPolicyVehicle,
 		email.TplAddPolicyDriver,
 		email.TplAddPolicyAddress,
 		email.TplAddPolicyCoverage,
 	}
 
-	for name, newProvider := range providers {
-		t.Run(name, func(t *testing.T) {
+	for _, tpl := range templates {
+		t.Run(string(tpl), func(t *testing.T) { checkProviderSends(t, newProvider(), tpl) })
+	}
+}
 
-			t.Parallel()
-
-			for _, tpl := range tpls {
-				p := newProvider()
-				msg := json.RawMessage(`{"foo":"bar"}`)
-
-				if err := p.Send([]string{"to@bar.com"}, msg, tpl); err != nil {
-					t.Fatalf("Send(%v): unexpected error: %v", tpl, err)
-				}
-				if err := p.SendWithCC([]string{"to@bar.com"}, []string{"cc@bar.com"}, msg, tpl); err != nil {
-					t.Fatalf("SendWithCC(%v): unexpected error: %v", tpl, err)
-				}
-				if err := p.SendWithCC([]string{"to@bar.com"}, nil, msg, tpl); err != nil {
-					t.Fatalf("SendWithCC(%v) with no cc: unexpected error: %v", tpl, err)
-				}
-			}
-		})
+func checkProviderSends(t *testing.T, p email.MailProvider, tpl email.TplID) {
+	t.Helper()
+	msg := json.RawMessage(`{"foo":"bar"}`)
+	if err := p.Send([]string{"to@bar.com"}, msg, tpl); err != nil {
+		t.Fatalf("Send(%s): %v", tpl, err)
+	}
+	if err := p.SendWithCC([]string{"to@bar.com"}, []string{"cc@bar.com"}, msg, tpl); err != nil {
+		t.Fatalf("SendWithCC(%s): %v", tpl, err)
+	}
+	if err := p.SendWithCC([]string{"to@bar.com"}, nil, msg, tpl); err != nil {
+		t.Fatalf("SendWithCC(%s, nil): %v", tpl, err)
 	}
 }

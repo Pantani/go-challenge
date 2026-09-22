@@ -83,10 +83,7 @@ func TestRun(t *testing.T) {
 			t.Parallel()
 			provider := &fakeProvider{loginErr: tc.loginErr}
 			var buf bytes.Buffer
-			var out io.Writer = &buf
-			if tc.out != nil {
-				out = tc.out
-			}
+			out := runTestOutput(tc.out, &buf)
 
 			err := run(func(key string) string { return tc.env[key] }, provider, out)
 
@@ -96,13 +93,28 @@ func TestRun(t *testing.T) {
 			if provider.calls != tc.wantCalls {
 				t.Fatalf("got %d Login calls, want %d", provider.calls, tc.wantCalls)
 			}
-			if tc.wantCalls > 0 && (provider.username != tc.env[envUsername] || provider.password != tc.env[envPassword]) {
-				t.Fatalf("Login got %q/%q, want the environment's %q/%q", provider.username, provider.password, tc.env[envUsername], tc.env[envPassword])
-			}
+			assertRunCredentials(t, provider, tc.env, tc.wantCalls)
 			if got := buf.String(); got != tc.wantOut {
 				t.Fatalf("got output %q, want %q", got, tc.wantOut)
 			}
 		})
+	}
+}
+
+func runTestOutput(override io.Writer, buffer *bytes.Buffer) io.Writer {
+	if override != nil {
+		return override
+	}
+	return buffer
+}
+
+func assertRunCredentials(t *testing.T, provider *fakeProvider, env map[string]string, wantCalls int) {
+	t.Helper()
+	if wantCalls == 0 {
+		return
+	}
+	if provider.username != env[envUsername] || provider.password != env[envPassword] {
+		t.Fatalf("Login got %q/%q, want the environment's %q/%q", provider.username, provider.password, env[envUsername], env[envPassword])
 	}
 }
 

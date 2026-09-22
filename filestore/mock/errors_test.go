@@ -31,25 +31,32 @@ func TestCancelledContextShortCircuits(t *testing.T) {
 	for name, op := range ops {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-
-			client := mock.NewClient(mock.Config{})
-			if err := client.Set(context.Background(), "a.txt", []byte("hello"), "text/plain"); err != nil {
-				t.Fatalf("seeding: %v", err)
-			}
-
-			if err := op(client); !errors.Is(err, context.Canceled) {
-				t.Fatalf("got %v, want context.Canceled", err)
-			}
-
-			if got, _ := readFile(t, client, "a.txt"); got != "hello" {
-				t.Fatalf("source changed to %q after a cancelled %s", got, name)
-			}
-			for _, name := range []string{"new.txt", "b.txt"} {
-				if _, _, err := client.Get(context.Background(), name); !errors.Is(err, filestore.ErrNotFound) {
-					t.Fatalf("%q should not exist after a cancelled op, got %v", name, err)
-				}
-			}
+			checkCancelledOperation(t, op)
 		})
+	}
+}
+
+func checkCancelledOperation(t *testing.T, op func(*mock.Client) error) {
+	t.Helper()
+	client := mock.NewClient(mock.Config{})
+	if err := client.Set(context.Background(), "a.txt", []byte("hello"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := op(client); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want canceled", err)
+	}
+	if got, _ := readFile(t, client, "a.txt"); got != "hello" {
+		t.Fatalf("source changed = %q", got)
+	}
+	assertCancelledKeysAbsent(t, client)
+}
+
+func assertCancelledKeysAbsent(t *testing.T, client *mock.Client) {
+	t.Helper()
+	for _, key := range []string{"new.txt", "b.txt"} {
+		if _, _, err := client.Get(context.Background(), key); !errors.Is(err, filestore.ErrNotFound) {
+			t.Fatalf("%q unexpectedly exists: %v", key, err)
+		}
 	}
 }
 

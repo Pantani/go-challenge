@@ -29,6 +29,7 @@ func TestRequireRecipientMissing(t *testing.T) {
 		"blank first entry": {""},
 		"blank later entry": {"a@example.com", ""},
 		"blank middle":      {"a@example.com", "", "c@example.com"},
+		"whitespace later":  {"a@example.com", " \t\n"},
 	}
 
 	for name, to := range tests {

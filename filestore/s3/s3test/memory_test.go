@@ -13,61 +13,77 @@ import (
 	"github.com/gloveboxhq/glovebox-go-code-challenge/filestore/s3/s3test"
 )
 
-func TestMemoryAPIObjectLifecycle(t *testing.T) {
-	t.Parallel()
+func putTestObject(t *testing.T, api *s3test.MemoryAPI, key, data, contentType string) {
+	t.Helper()
+	if err := api.PutObject(context.Background(), "b", key, strings.NewReader(data), contentType); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	ctx := context.Background()
+func assertMemoryObject(t *testing.T, api *s3test.MemoryAPI, key, wantData, wantType string) {
+	t.Helper()
+	body, contentType, err := api.GetObject(context.Background(), "b", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != wantData || contentType != wantType {
+		t.Fatalf("object = (%q, %q), want (%q, %q)", data, contentType, wantData, wantType)
+	}
+}
+
+func assertMemoryHead(t *testing.T, api *s3test.MemoryAPI, bucket, key string, want error) {
+	t.Helper()
+	if err := api.HeadObject(context.Background(), bucket, key); !errors.Is(err, want) {
+		t.Fatalf("HeadObject(%q, %q) = %v, want %v", bucket, key, err, want)
+	}
+}
+
+func TestMemoryAPIKeysAreScopedToBucket(t *testing.T) {
 	api := &s3test.MemoryAPI{}
+	assertMemoryHead(t, api, "b", "k", s3.ErrNoSuchKey)
+	putTestObject(t, api, "k", "data", "text/plain")
+	assertMemoryHead(t, api, "b", "k", nil)
+	assertMemoryHead(t, api, "other", "k", s3.ErrNoSuchKey)
+}
 
-	if err := api.HeadObject(ctx, "b", "k"); !errors.Is(err, s3.ErrNoSuchKey) {
-		t.Fatalf("HeadObject on empty store: error = %v, want ErrNoSuchKey", err)
-	}
-	if err := api.PutObject(ctx, "b", "k", strings.NewReader("data"), "text/plain"); err != nil {
-		t.Fatalf("PutObject: %v", err)
-	}
-	if err := api.HeadObject(ctx, "b", "k"); err != nil {
-		t.Fatalf("HeadObject: %v", err)
-	}
-	// Objects are scoped per bucket.
-	if err := api.HeadObject(ctx, "other", "k"); !errors.Is(err, s3.ErrNoSuchKey) {
-		t.Fatalf("HeadObject in other bucket: error = %v, want ErrNoSuchKey", err)
-	}
-
-	// CopyObject copies the content type and, like S3, overwrites.
-	if err := api.PutObject(ctx, "b", "j", strings.NewReader("old"), "image/png"); err != nil {
+func TestMemoryAPICopyOverwritesMetadata(t *testing.T) {
+	api := &s3test.MemoryAPI{}
+	putTestObject(t, api, "k", "data", "text/plain")
+	putTestObject(t, api, "j", "old", "image/png")
+	if err := api.CopyObject(context.Background(), "b", "k", "j"); err != nil {
 		t.Fatal(err)
 	}
-	if err := api.CopyObject(ctx, "b", "k", "j"); err != nil {
-		t.Fatalf("CopyObject: %v", err)
+	assertMemoryObject(t, api, "k", "data", "text/plain")
+	assertMemoryObject(t, api, "j", "data", "text/plain")
+}
+
+func TestMemoryAPIDeleteIsIdempotent(t *testing.T) {
+	api := &s3test.MemoryAPI{}
+	putTestObject(t, api, "k", "data", "text/plain")
+	for range 2 {
+		if err := api.DeleteObject(context.Background(), "b", "k"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	body, contentType, err := api.GetObject(ctx, "b", "j")
+	assertMemoryHead(t, api, "b", "k", s3.ErrNoSuchKey)
+	if err := api.CopyObject(context.Background(), "b", "k", "j"); !errors.Is(err, s3.ErrNoSuchKey) {
+		t.Fatalf("CopyObject missing source = %v", err)
+	}
+}
+
+func TestMemoryAPIPresignDuration(t *testing.T) {
+	api := &s3test.MemoryAPI{}
+	url, err := api.PresignGetObject(context.Background(), "b", "j", 90*time.Second)
 	if err != nil {
-		t.Fatalf("GetObject: %v", err)
-	}
-	data, _ := io.ReadAll(body)
-	if string(data) != "data" || contentType != "text/plain" {
-		t.Fatalf("GetObject = (%q, %q), want (%q, %q)", data, contentType, "data", "text/plain")
-	}
-	if err := body.Close(); err != nil {
 		t.Fatal(err)
-	}
-
-	if err := api.DeleteObject(ctx, "b", "k"); err != nil {
-		t.Fatalf("DeleteObject: %v", err)
-	}
-	if err := api.DeleteObject(ctx, "b", "k"); err != nil {
-		t.Fatalf("DeleteObject of a missing key: %v", err)
-	}
-	if err := api.CopyObject(ctx, "b", "k", "j"); !errors.Is(err, s3.ErrNoSuchKey) {
-		t.Fatalf("CopyObject from missing key: error = %v, want ErrNoSuchKey", err)
-	}
-
-	url, err := api.PresignGetObject(ctx, "b", "j", 90*time.Second)
-	if err != nil {
-		t.Fatalf("PresignGetObject: %v", err)
 	}
 	if want := "https://b.s3.example/j?X-Amz-Expires=90"; url != want {
-		t.Fatalf("PresignGetObject = %q, want %q", url, want)
+		t.Fatalf("URL = %q, want %q", url, want)
 	}
 }
 

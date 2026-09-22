@@ -27,6 +27,8 @@ COMPLEXITY_CONFIG := .golangci-complexity.yml
 
 CACHE_DIR := .cache
 COVER_DIR := $(CACHE_DIR)/coverage
+MIN_COVERAGE ?= 90
+COVERAGE_ENV_carrierproxy := CARRIERPROXY_USERNAME=ci-user CARRIERPROXY_PASSWORD=ci-pass
 
 # Docker
 DOCKER             ?= docker
@@ -62,7 +64,7 @@ help: ## Show this help
 	@printf "\n\033[1mModules\033[0m\n  %s\n" "$(MODULES)"
 	@printf "\n\033[1mPer-module targets\033[0m\n"
 	@printf "  <action>-<module>, e.g. make test-filestore, make lint-comms\n"
-	@printf "  actions: test race cover vet lint complexity fmt fmt-check tidy tidy-check build check\n"
+	@printf "  actions: test race cover coverage-check vet lint complexity fmt fmt-check tidy tidy-check build check\n"
 	@printf "\n\033[1mExamples\033[0m\n"
 	@printf "  make test TESTFLAGS=\"-v -run TestCopy\"\n"
 	@printf "  make docker-check-notifier\n"
@@ -92,11 +94,12 @@ else
 
 ##@ All modules
 
-.PHONY: test race cover vet lint complexity fmt fmt-check tidy tidy-check build check clean
+.PHONY: test race cover coverage-check vet lint complexity fmt fmt-check tidy tidy-check build check clean
 
 test: $(addprefix test-,$(MODULES)) ## Run tests for all modules
 race: $(addprefix race-,$(MODULES)) ## Run tests with the race detector and coverage for all modules (as CI)
 cover: $(addprefix cover-,$(MODULES)) ## Generate coverage reports for all modules
+coverage-check: $(addprefix coverage-check-,$(MODULES)) ## Run race tests and enforce minimum coverage for all modules
 vet: $(addprefix vet-,$(MODULES)) ## Run go vet for all modules
 lint: $(addprefix lint-,$(MODULES)) ## Run golangci-lint for all modules
 complexity: $(addprefix complexity-,$(MODULES)) ## Check cyclomatic/cognitive complexity for all modules
@@ -105,7 +108,7 @@ fmt-check: $(addprefix fmt-check-,$(MODULES)) ## Fail if any module has unformat
 tidy: $(addprefix tidy-,$(MODULES)) ## Run go mod tidy for all modules
 tidy-check: $(addprefix tidy-check-,$(MODULES)) ## Fail if any go.mod/go.sum is not tidy
 build: $(addprefix build-,$(MODULES)) ## Build all modules
-check: fmt-check tidy-check build vet lint complexity race ## Run every check (mirrors CI)
+check: fmt-check tidy-check build vet lint complexity coverage-check ## Run every check (mirrors CI)
 
 clean: ## Remove coverage reports and Docker caches
 	@# the Go module cache is read-only; make it writable before removing
@@ -114,7 +117,7 @@ clean: ## Remove coverage reports and Docker caches
 
 # Per-module targets, generated for every module in $(MODULES).
 define MODULE_RULES
-.PHONY: test-$(1) race-$(1) cover-$(1) vet-$(1) lint-$(1) complexity-$(1) fmt-$(1) fmt-check-$(1) tidy-$(1) tidy-check-$(1) build-$(1) check-$(1)
+.PHONY: test-$(1) race-$(1) cover-$(1) coverage-check-$(1) vet-$(1) lint-$(1) complexity-$(1) fmt-$(1) fmt-check-$(1) tidy-$(1) tidy-check-$(1) build-$(1) check-$(1)
 
 test-$(1):
 	@echo ">> test $(1)"
@@ -123,6 +126,12 @@ test-$(1):
 race-$(1):
 	@echo ">> race $(1)"
 	cd $(1) && CGO_ENABLED=1 $(GO) test -race -cover $(TESTFLAGS) ./...
+
+coverage-check-$(1):
+	@echo ">> coverage-check $(1)"
+	@mkdir -p $(COVER_DIR)
+	cd $(1) && $(COVERAGE_ENV_$(1)) CGO_ENABLED=1 $(GO) test -race $(TESTFLAGS) -coverprofile=$(CURDIR)/$(COVER_DIR)/$(1).out ./...
+	cd $(1) && GO=$(GO) $(CURDIR)/scripts/check-coverage.sh $(CURDIR)/$(COVER_DIR)/$(1).out $(MIN_COVERAGE)
 
 cover-$(1):
 	@echo ">> cover $(1)"
@@ -178,7 +187,7 @@ build-$(1):
 	@echo ">> build $(1)"
 	cd $(1) && $(GO) build ./...
 
-check-$(1): fmt-check-$(1) tidy-check-$(1) build-$(1) vet-$(1) lint-$(1) complexity-$(1) race-$(1)
+check-$(1): fmt-check-$(1) tidy-check-$(1) build-$(1) vet-$(1) lint-$(1) complexity-$(1) coverage-check-$(1)
 endef
 
 $(foreach m,$(MODULES),$(eval $(call MODULE_RULES,$(m))))

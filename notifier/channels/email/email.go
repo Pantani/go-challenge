@@ -5,6 +5,7 @@ package email
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type TplID string
@@ -19,6 +20,9 @@ const (
 // recipient list is empty or contains a blank address.
 var ErrMissingRecipient = errors.New("email requires recipient")
 
+// ErrMissingTemplate is returned (wrapped) when a template identifier is blank.
+var ErrMissingTemplate = errors.New("email requires template")
+
 type MailProvider interface {
 	Send(to []string, tpl TplID, vars map[string]any) error
 }
@@ -31,9 +35,18 @@ func RequireRecipient(to []string) error {
 		return ErrMissingRecipient
 	}
 	for i, addr := range to {
-		if addr == "" {
+		if strings.TrimSpace(addr) == "" {
 			return fmt.Errorf("%w: entry %d is blank", ErrMissingRecipient, i)
 		}
+	}
+	return nil
+}
+
+// RequireTemplate rejects empty or whitespace-only template identifiers.
+// It does not normalize a caller's nonblank identifier.
+func RequireTemplate(tpl TplID) error {
+	if strings.TrimSpace(string(tpl)) == "" {
+		return fmt.Errorf("validate template: %w", ErrMissingTemplate)
 	}
 	return nil
 }
