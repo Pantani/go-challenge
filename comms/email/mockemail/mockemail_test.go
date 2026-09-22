@@ -65,7 +65,12 @@ func TestSendWithCCRecordsCCOnEveryLog(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	for i, l := range c.SendLogs() {
+	logs := c.SendLogs()
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 send logs, got %d", len(logs))
+	}
+
+	for i, l := range logs {
 		if got := l.ExtractCC(); !reflect.DeepEqual(got, cc) {
 			t.Fatalf("log %d: expected cc %v, got %v", i, cc, got)
 		}

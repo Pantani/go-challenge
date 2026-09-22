@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/launcher/flags"
 )
 
 // TestLaunchPageWithFailedLaunch covers launchPageWith's launch-failure
@@ -47,12 +48,37 @@ func TestLaunchPageWithFailedLaunch(t *testing.T) {
 				}
 			}()
 
+			// Generous on purpose: go-rod serializes launches (and browser
+			// downloads) across processes on a shared lock port, so a
+			// concurrent browser test can delay this one without it hanging.
 			select {
 			case <-done:
-			case <-time.After(30 * time.Second):
+			case <-time.After(2 * time.Minute):
 				t.Fatal("launchPageWith hung cleaning up after a failed launch")
 			}
 		})
+	}
+}
+
+// TestNewLauncher checks launchPage uses a locally installed browser when
+// there is one, and otherwise leaves Bin unset so go-rod downloads its own.
+func TestNewLauncher(t *testing.T) {
+	t.Parallel()
+
+	found := newLauncher(func() (string, bool) { return "/opt/chrome/chrome", true })
+	if got := found.Get(flags.Bin); got != "/opt/chrome/chrome" {
+		t.Fatalf("expected Bin to be the local browser, got %q", got)
+	}
+	if !found.Has(flags.Headless) {
+		t.Fatal("expected the launcher to be headless")
+	}
+
+	notFound := newLauncher(func() (string, bool) { return "", false })
+	if got := notFound.Get(flags.Bin); got != launcher.New().Get(flags.Bin) {
+		t.Fatalf("expected go-rod's default Bin when no browser is found, got %q", got)
+	}
+	if !notFound.Has(flags.Headless) {
+		t.Fatal("expected the launcher to be headless")
 	}
 }
 

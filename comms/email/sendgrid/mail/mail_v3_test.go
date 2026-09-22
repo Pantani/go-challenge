@@ -62,10 +62,13 @@ func TestV3MailBuilder(t *testing.T) {
 	}
 }
 
-// TestAddPersonalizationCopies confirms AddPersonalization stores a copy,
-// so mutating the builder afterwards doesn't change an already added
-// personalization.
-func TestAddPersonalizationCopies(t *testing.T) {
+// TestAddPersonalizationSnapshotsRecipients confirms AddPersonalization
+// stores the personalization by value, so recipients added to the builder
+// afterwards don't show up in an already added personalization. The copy
+// is shallow (the recipient slices still share a backing array), so this
+// only pins down the append behavior sendgrid.Client relies on, not deep
+// isolation, which the vendored stand-in doesn't provide.
+func TestAddPersonalizationSnapshotsRecipients(t *testing.T) {
 
 	t.Parallel()
 
