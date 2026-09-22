@@ -4,7 +4,7 @@ The challenge is to solve an emerging business problem within an existing codeba
 
 **Context:**
 
-The existing codebase represents a restful API for various comms operations. The API utilizes an email service inside the route handlers to send emails. In the `main.go` server application the email service uses a sendgrid implementation, but the handlers also have unit tests which utilize a mock implementation to ensure full coverage of the handler email functionality.
+The existing codebase represents a restful API for various comms operations. The API utilizes an email service inside the route handlers to send emails. In the `cmd/comms` server binary the email service uses a sendgrid implementation, but the handlers also have unit tests which utilize a mock implementation to ensure full coverage of the handler email functionality.
 
 **Business Problem:**
 
@@ -18,25 +18,26 @@ The comms api needs to support a new operation for adding policy coverage. The n
 
 ## Layout
 
-The existing package layout is unchanged — this challenge is additive, not a restructuring:
-
 ```
 comms/
-├── main.go                   # config from env, newMux (route table), newServer (timeouts), run/main
-├── main_test.go               # integration tests: real HTTP requests against newMux; config + server tests
-├── handlers/                 # one http.HandlerFunc per comms operation
-│   ├── handlers.go             # AddPolicyVehicle/Driver/Address/Coverage + the shared sendHandler pipeline
-│   ├── models.go                # one request struct per operation
-│   └── handlers_test.go          # one table-driven test func per handler, sharing a common case set
-└── email/                    # the MailProvider contract and its implementations
-    ├── email.go                 # MailProvider interface, TplID, template constants
-    ├── sendgrid/                 # real implementation, backed by the vendored mail stand-in
-    └── mockemail/                 # goroutine-safe in-memory implementation used by handler tests
+├── cmd/comms/
+│   ├── main.go                # server binary (package main): config from env, newMux (route table),
+│   │                          # newServer (timeouts), run/main
+│   └── main_test.go            # integration tests: real HTTP requests against newMux; config + server tests
+├── handlers.go                # AddPolicyVehicle/Driver/Address/Coverage + the shared sendHandler pipeline
+├── models.go                   # one request struct per operation
+├── handlers_test.go             # one table-driven test func per handler, sharing a common case set
+└── email/                     # the MailProvider contract and its implementations
+    ├── email.go                  # MailProvider interface, TplID, template constants
+    ├── sendgrid/                  # real implementation, backed by the vendored mail stand-in
+    └── mockemail/                  # goroutine-safe in-memory implementation used by handler tests
 ```
+
+The root `comms` package holds the API's domain logic (the four handlers and the shared `sendHandler` pipeline), matching the `carrierproxy`/`filestore`/`notifier` convention: the root package holds the domain, `cmd/comms` holds only the server entrypoint. `email` is the delivery mechanism the handlers depend on, following the same interface-plus-implementations shape as `notifier/channels/email`.
 
 ## What's implemented
 
-`AddPolicyCoverage` (see [`handlers/handlers.go`](handlers/handlers.go)) is a new handler registered at `POST /api/comms/add-policy-coverage`. It runs through the same pipeline as the three existing handlers — method check, bounded JSON decode, validation, send, translate errors to HTTP status codes — with one difference: its request struct, `AddPolicyCoverageReq` (see [`handlers/models.go`](handlers/models.go)), adds an `email_cc` field alongside the shared `email_to`/`message` contract:
+`AddPolicyCoverage` (see [`handlers.go`](handlers.go)) is a new handler registered at `POST /api/comms/add-policy-coverage`. It runs through the same pipeline as the three existing handlers — method check, bounded JSON decode, validation, send, translate errors to HTTP status codes — with one difference: its request struct, `AddPolicyCoverageReq` (see [`models.go`](models.go)), adds an `email_cc` field alongside the shared `email_to`/`message` contract:
 
 ```go
 type AddPolicyCoverageReq struct {
@@ -73,13 +74,13 @@ Before delivery the CC list is normalised so the provider is never asked to copy
 
 **`MailProvider` gained a method, not a changed signature.** The existing `Send(to []string, message json.RawMessage, tpl TplID) error` is untouched. `SendWithCC(to, cc []string, message json.RawMessage, tpl TplID) error` is the new, additive method (see [`email/email.go`](email/email.go)); the handler pipeline calls it only when CC recipients remain after normalisation, and `Send` otherwise. Both `sendgrid.Client` and `mockemail.Client` implement `Send` and `SendWithCC` against one shared private helper (`send`/`record`), so the CC-handling logic exists in exactly one place per implementation.
 
-**The four handlers share one generic pipeline.** `sendHandler[T]` (see [`handlers/handlers.go`](handlers/handlers.go)) owns the method check, `http.MaxBytesReader`-bounded decode with trailing-data rejection, field validation, CC normalisation, delivery and error translation. Each exported handler is a three-line adapter that maps its own request struct onto a provider-agnostic `envelope{to, cc, message}`. Adding a fifth operation means adding a request struct and one adapter; the contract table above applies to it automatically.
+**The four handlers share one generic pipeline.** `sendHandler[T]` (see [`handlers.go`](handlers.go)) owns the method check, `http.MaxBytesReader`-bounded decode with trailing-data rejection, field validation, CC normalisation, delivery and error translation. Each exported handler is a three-line adapter that maps its own request struct onto a provider-agnostic `envelope{to, cc, message}`. Adding a fifth operation means adding a request struct and one adapter; the contract table above applies to it automatically.
 
 **The sendgrid wrapper is unit-testable, including its error path, without touching the vendored stand-in.** `sendgrid.Client` holds an unexported `mailClient` interface — the one method (`Send(*mail.V3Mail) error`) `Client` actually depends on (see [`email/sendgrid/sendgrid.go`](email/sendgrid/sendgrid.go)). `*mail.Client` satisfies that interface automatically, so `mail_v3.go` (marked "please do not modify") needed no changes. [`email/sendgrid/sendgrid_test.go`](email/sendgrid/sendgrid_test.go) substitutes a fake that captures the generated `*mail.V3Mail` and can return an error the real stand-in never does; since that type also has no getters, the test reads its unexported fields the same way `%+v` does — `fmt`'s own struct formatting — rather than adding `unsafe` or touching the vendored type. `Client` refuses to build a message with no `To` recipient (`sendgrid.ErrNoRecipients`) and wraps provider failures with context while keeping them reachable through `errors.Is`.
 
 **`mockemail` is goroutine-safe and hands out snapshots.** `Client` guards its log with a mutex; `SendLogs()` returns a copy, and `ExtractCC`/`ExtractMessage` return copies too, so tests (including parallel ones) cannot alias the client's state or each other's inputs. `SendLog` gained a `cc` field and `ExtractCC()` getter (see [`email/mockemail/sendlog.go`](email/mockemail/sendlog.go)) following the existing `Extract*` accessor pattern, and `SendLogs.Last()` returns `nil` on an empty log instead of panicking.
 
-**`main.go` is configurable and defensive.** `loadConfig` reads the environment (see Usage) and falls back to the built-in defaults; `newMux(emailsvc)` builds the route table on a fresh `http.ServeMux` rather than the global default; `newServer` wraps it in an `http.Server` with read-header, read, write and idle timeouts. [`main_test.go`](main_test.go) drives `newMux` through `httptest.NewServer` with real HTTP requests, table-tests `loadConfig`, checks `newServer`'s timeouts, and covers `run` by handing it a port the test already holds so `ListenAndServe` fails immediately.
+**`cmd/comms/main.go` is configurable and defensive.** `loadConfig` reads the environment (see Usage) and falls back to the built-in defaults; `newMux(emailsvc)` builds the route table on a fresh `http.ServeMux` rather than the global default; `newServer` wraps it in an `http.Server` with read-header, read, write and idle timeouts. [`cmd/comms/main_test.go`](cmd/comms/main_test.go) drives `newMux` through `httptest.NewServer` with real HTTP requests, table-tests `loadConfig`, checks `newServer`'s timeouts, and covers `run` by handing it a port the test already holds so `ListenAndServe` fails immediately.
 
 Functions stay within the repo's complexity limits (cyclomatic ≤ 6, cognitive ≤ 8), enforced in CI:
 
@@ -90,7 +91,7 @@ golangci-lint run --config ../.golangci-complexity.yml ./...
 ## Usage
 
 ```bash
-go run .
+go run ./cmd/comms
 ```
 
 The server listens on `:8090` by default. Every setting has a built-in default and can be overridden through the environment; an unset or empty variable keeps the default:
@@ -103,7 +104,7 @@ The server listens on `:8090` by default. Every setting has a built-in default a
 | `COMMS_EMAIL_FROM_ADDRESS` | `foo@bar.com` | sender address |
 
 ```bash
-COMMS_ADDR=:9000 COMMS_SENDGRID_API_KEY=SG.xxx go run .
+COMMS_ADDR=:9000 COMMS_SENDGRID_API_KEY=SG.xxx go run ./cmd/comms
 ```
 
 ```bash
@@ -120,11 +121,11 @@ The three pre-existing routes (`add-policy-vehicle`, `add-policy-driver`, `add-p
 go test ./... -race -cover
 ```
 
-Every package is at 100% except `main`, where only `main()` itself (`log.Fatal(run(loadConfig(os.Getenv)))`) is uncovered. CI requires at least 90% per module.
+Every package is at 100% except `cmd/comms` (package `main`), where only `main()` itself (`log.Fatal(run(loadConfig(os.Getenv)))`) is uncovered. CI requires at least 90% per module.
 
-- `handlers/handlers_test.go` runs one shared table of cases against all four handlers: success, trimmed addresses, every row of the contract table above, and a provider failure. `TestAddPolicyCoverage` adds the CC rules: CC recorded on the send, per-index validation errors, trimming, case-insensitive de-duplication, dropping the `To` address, and falling back to a plain send when the list ends up empty. `TestSendErrorIsLoggedNotEchoed` checks that provider errors are logged but not returned to the client.
+- `handlers_test.go` runs one shared table of cases against all four handlers: success, trimmed addresses, every row of the contract table above, and a provider failure. `TestAddPolicyCoverage` adds the CC rules: CC recorded on the send, per-index validation errors, trimming, case-insensitive de-duplication, dropping the `To` address, and falling back to a plain send when the list ends up empty. `TestSendErrorIsLoggedNotEchoed` checks that provider errors are logged but not returned to the client.
 - `email/contract_test.go` runs the same `MailProvider` expectations against both `sendgrid` and `mockemail`, so the mock can't drift from the real provider.
 - `email/mockemail/mockemail_test.go` covers per-recipient logging, `Last()` on an empty log, flushing, snapshot semantics and concurrent use.
 - `email/sendgrid/sendgrid_test.go` checks recipients, sender, template and message in the generated `V3Mail`, rejection of zero `To` recipients, and error wrapping.
 - `email/sendgrid/mail/mail_v3_test.go` pins the behavior of the vendored stand-in that `sendgrid.Client` relies on, without modifying it.
-- `main_test.go` covers routing, rejections and 404s, `loadConfig`, `newServer`'s timeouts and `run`'s listen failure.
+- `cmd/comms/main_test.go` covers routing, rejections and 404s, `loadConfig`, `newServer`'s timeouts and `run`'s listen failure.

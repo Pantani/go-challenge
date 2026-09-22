@@ -1,5 +1,6 @@
 // Command comms runs the comms REST API. Each route accepts a JSON POST and
-// sends a templated email through sendgrid.
+// sends a templated email through sendgrid. See ../../README.md for the
+// challenge this module implements.
 package main
 
 import (
@@ -8,9 +9,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/comms"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/sendgrid"
-	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/handlers"
 )
 
 // Built-in defaults, each overridable through the environment variable
@@ -55,10 +56,10 @@ func loadConfig(getenv func(string) string) config {
 // test, without a real network listener or sendgrid credentials.
 func newMux(emailsvc email.MailProvider) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/comms/add-policy-vehicle", handlers.AddPolicyVehicle(emailsvc))
-	mux.HandleFunc("/api/comms/add-policy-driver", handlers.AddPolicyDriver(emailsvc))
-	mux.HandleFunc("/api/comms/add-policy-address", handlers.AddPolicyAddress(emailsvc))
-	mux.HandleFunc("/api/comms/add-policy-coverage", handlers.AddPolicyCoverage(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-vehicle", comms.AddPolicyVehicle(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-driver", comms.AddPolicyDriver(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-address", comms.AddPolicyAddress(emailsvc))
+	mux.HandleFunc("/api/comms/add-policy-coverage", comms.AddPolicyCoverage(emailsvc))
 	return mux
 }
 

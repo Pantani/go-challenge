@@ -1,4 +1,4 @@
-package handlers_test
+package comms_test
 
 import (
 	"bytes"
@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gloveboxhq/glovebox-go-code-challenge/comms"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/mockemail"
-	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/handlers"
 )
 
 // TestMain silences the handlers' send-error log line so the failure-path
@@ -240,17 +240,17 @@ func assertLastSend(t *testing.T, testEmail *mockemail.Client, tpl email.TplID, 
 
 func TestAddPolicyVehicle(t *testing.T) {
 	t.Parallel()
-	runHandlerCases(t, handlers.AddPolicyVehicle, email.TplAddPolicyVehicle, commonCases())
+	runHandlerCases(t, comms.AddPolicyVehicle, email.TplAddPolicyVehicle, commonCases())
 }
 
 func TestAddPolicyDriver(t *testing.T) {
 	t.Parallel()
-	runHandlerCases(t, handlers.AddPolicyDriver, email.TplAddPolicyDriver, commonCases())
+	runHandlerCases(t, comms.AddPolicyDriver, email.TplAddPolicyDriver, commonCases())
 }
 
 func TestAddPolicyAddress(t *testing.T) {
 	t.Parallel()
-	runHandlerCases(t, handlers.AddPolicyAddress, email.TplAddPolicyAddress, commonCases())
+	runHandlerCases(t, comms.AddPolicyAddress, email.TplAddPolicyAddress, commonCases())
 }
 
 // TestAddPolicyCoverage proves the new handler meets the shared contract and
@@ -340,7 +340,7 @@ func TestAddPolicyCoverage(t *testing.T) {
 		expectBody:   "error sending email\n",
 	}
 
-	runHandlerCases(t, handlers.AddPolicyCoverage, email.TplAddPolicyCoverage, cases)
+	runHandlerCases(t, comms.AddPolicyCoverage, email.TplAddPolicyCoverage, cases)
 }
 
 // TestSendErrorIsLoggedNotEchoed pins the 500 contract: the provider's error
@@ -360,7 +360,7 @@ func TestSendErrorIsLoggedNotEchoed(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/comms/add-policy-coverage", strings.NewReader(validBody))
 
-	handlers.AddPolicyCoverage(erroringMailProvider{err: errors.New("secret provider detail")})(w, req)
+	comms.AddPolicyCoverage(erroringMailProvider{err: errors.New("secret provider detail")})(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status %v but got %v", http.StatusInternalServerError, w.Code)

@@ -1,4 +1,4 @@
-package handlers
+package comms
 
 import (
 	"encoding/json"
