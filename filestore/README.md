@@ -22,19 +22,19 @@ The application needs to copy an existing stored file to a new key without expos
 Copy(ctx context.Context, oldFilename, newFilename string) error
 ```
 
-It duplicates the file stored under `oldFilename` to `newFilename`, leaving the original untouched. Both providers implement it:
+Both providers implement the method, but only `mock.Client` gives it real behavior:
 
-* **S3-shaped client** (`s3.Client`) — a no-op stub, consistent with its other methods.
-* **In-memory mock** (`mock.Client`) — copies the stored bytes into a new, independent object before storing it under the destination key, so closing or reading one copy never affects the other.
+* **In-memory mock** (`mock.Client`) — duplicates the file stored under `oldFilename` to `newFilename` into a new, independent object, leaving the original untouched, so closing or reading one copy never affects the other. Enforces the error contract below.
+* **S3-shaped client** (`s3.Client`) — a no-op stub, consistent with its other methods: it ignores both filenames and always returns `nil`, without creating a destination or checking whether either file exists.
 
-### Error contract
+### Error contract (`mock.Client` only)
 
 * `filestore.ErrNotFound` — `oldFilename` does not exist.
 * `filestore.ErrFileExists` — `newFilename` already exists.
 
 ## Running the tests
 
-```
+```bash
 go test ./... -race -cover
 ```
 
