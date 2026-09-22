@@ -62,7 +62,10 @@ func TestClientGet(t *testing.T) {
 func TestClientGetDoesNotConsumeStoredFile(t *testing.T) {
 	t.Parallel()
 
-	client := newClientWithFiles(t, map[string]string{"greeting.txt": "hello world"})
+	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test"}})
+	if err := client.Set(context.Background(), "greeting.txt", []byte("hello world"), "text/plain"); err != nil {
+		t.Fatalf("setting file: %v", err)
+	}
 
 	if got := readFile(t, client, "greeting.txt"); got != "hello world" {
 		t.Fatalf("expected content %q on first get but got %q", "hello world", got)
