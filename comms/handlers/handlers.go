@@ -1,7 +1,7 @@
-// Package comms exposes the HTTP handlers of the comms API. Every handler
+// Package handlers exposes the HTTP handlers of the comms API. Every handler
 // accepts a JSON POST payload, validates it, and forwards a templated email
 // through the injected email.MailProvider.
-package comms
+package handlers
 
 import (
 	"bytes"
