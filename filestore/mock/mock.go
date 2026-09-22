@@ -7,6 +7,8 @@ import (
 	"io"
 	"path/filepath"
 	"time"
+
+	"github.com/gloveboxhq/glovebox-go-code-challenge/filestore"
 )
 
 type Bucket struct {
@@ -63,6 +65,21 @@ func (c *Client) Move(_ context.Context, oldFilename, newFilename string) error 
 	}
 	c.bucket.Objects[c.key(newFilename)] = file
 	delete(c.bucket.Objects, c.key(oldFilename))
+	return nil
+}
+
+func (c *Client) Copy(_ context.Context, oldFilename, newFilename string) error {
+	src, ok := c.bucket.Objects[c.key(oldFilename)]
+	if !ok {
+		return filestore.ErrNotFound
+	}
+	if _, exists := c.bucket.Objects[c.key(newFilename)]; exists {
+		return filestore.ErrFileExists
+	}
+
+	dst := &MemoryFile{}
+	_, _ = dst.Write(src.Bytes())
+	c.bucket.Objects[c.key(newFilename)] = dst
 	return nil
 }
 
