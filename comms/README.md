@@ -22,7 +22,8 @@ The existing package layout is unchanged — this challenge is additive, not a r
 
 ```
 comms/
-├── main.go                   # wires the sendgrid client to the routes
+├── main.go                   # newMux (route table) + main (wires sendgrid, listens)
+├── main_test.go               # integration test: real HTTP requests against newMux
 ├── handlers/                 # one http.HandlerFunc per comms operation
 │   ├── handlers.go             # AddPolicyVehicle, AddPolicyDriver, AddPolicyAddress, AddPolicyCoverage
 │   ├── models.go                # one request struct per operation
@@ -49,9 +50,13 @@ type AddPolicyCoverageReq struct {
 
 **`MailProvider` gained a method, not a changed signature.** The existing `Send(to []string, message json.RawMessage, tpl TplID) error` is untouched, so the three pre-existing handlers and their tests needed no changes. `SendWithCC(to, cc []string, message json.RawMessage, tpl TplID) error` is the new, additive method that only `AddPolicyCoverage` calls (see [`email/email.go`](email/email.go)). Both `sendgrid.Client` and `mockemail.Client` implement `Send` and `SendWithCC` against one shared private helper (`send`/`record`), so the CC-handling logic exists in exactly one place per implementation.
 
-**The sendgrid wrapper is now unit-testable, including its error path, without touching the vendored stand-in.** `sendgrid.Client` used to hold a concrete `*mail.Client`. It now holds an unexported `mailClient` interface — the one method (`Send(*mail.V3Mail) error`) `Client` actually depends on (see [`email/sendgrid/sendgrid.go`](email/sendgrid/sendgrid.go)). `*mail.Client` satisfies that interface automatically, so `mail_v3.go` (marked "please do not modify") needed no changes; [`email/sendgrid/sendgrid_test.go`](email/sendgrid/sendgrid_test.go) substitutes a fake that can return an error, which the real stand-in never does.
+**The sendgrid wrapper is now unit-testable, including its error path, without touching the vendored stand-in.** `sendgrid.Client` used to hold a concrete `*mail.Client`. It now holds an unexported `mailClient` interface — the one method (`Send(*mail.V3Mail) error`) `Client` actually depends on (see [`email/sendgrid/sendgrid.go`](email/sendgrid/sendgrid.go)). `*mail.Client` satisfies that interface automatically, so `mail_v3.go` (marked "please do not modify") needed no changes. [`email/sendgrid/sendgrid_test.go`](email/sendgrid/sendgrid_test.go) substitutes a fake that captures the generated `*mail.V3Mail` and can return an error the real stand-in never does; since that type also has no getters (same "do not modify" constraint), the test reads its unexported `To`/`CC` fields the same way `%+v` does — `fmt`'s own struct formatting — rather than adding `unsafe` or touching the vendored type. This means the tests assert recipients actually land in the right field, not just that the call succeeds.
 
 **`mockemail` gained a `cc` field and `ExtractCC()` getter** on `SendLog` (see [`email/mockemail/sendlog.go`](email/mockemail/sendlog.go)), following the existing `Extract*` accessor pattern, so handler tests can assert on recorded CC recipients the same way they already assert on `To`, `Message` and the template ID.
+
+**`main.go`'s route table was extracted into `newMux(emailsvc) *http.ServeMux`**, replacing registration on the global `http.DefaultServeMux`. `main()` now just builds the real `sendgrid` client and calls `newMux` + `ListenAndServe`; [`main_test.go`](main_test.go) builds the same mux with `mockemail` instead and drives it through `httptest.NewServer` with real HTTP requests — an integration test covering the actual routing, which no test exercised before (the handler tests call handler funcs directly, bypassing routing entirely).
+
+**Two of the three pre-existing handlers were missing a `return`** after their method-not-allowed check (`AddPolicyDriver`, `AddPolicyAddress` — `AddPolicyVehicle` had it right). Harmless in practice (the first `http.Error` call wins), but real: execution fell through to decode the body anyway. Fixed to match `AddPolicyVehicle`'s and `AddPolicyCoverage`'s pattern while extending those handlers' tests.
 
 Every function touched by this change is kept small and single-purpose, checked with [`gocyclo`](https://github.com/fzipp/gocyclo) and [`gocognit`](https://github.com/uudashr/gocognit). The highest in the module — `AddPolicyCoverage`, tied with its three siblings — sits at cyclomatic complexity 4 and cognitive complexity 6:
 
@@ -78,8 +83,10 @@ curl -X POST localhost:8090/api/comms/add-policy-coverage \
 go test ./...
 ```
 
-**Coverage** (`go test ./... -coverpkg=./... -coverprofile=cover.out && go tool cover -func=cover.out`): every function touched by this change — `AddPolicyCoverage`, all of `email/sendgrid/sendgrid.go`, and all of `email/mockemail` (`mockemail.go` and `sendlog.go`) — is at **100%**, including the sendgrid error-return path (see Design, above). `TestAddPolicyCoverage` in [`handlers/handlers_test.go`](handlers/handlers_test.go) covers all four branches: success (asserting `To`, `CC`, `Message` and template on the recorded send), invalid method, invalid JSON payload, and an email-service failure (via a small local `erroringMailProvider` fake, since `mockemail.Client` never fails on its own).
+**Coverage** (`go test ./... -coverpkg=./... -coverprofile=cover.out && go tool cover -func=cover.out`): **92.9%** of statements module-wide. Every handler (`AddPolicyVehicle`, `AddPolicyDriver`, `AddPolicyAddress`, `AddPolicyCoverage`), `newMux`, and everything in `email/sendgrid` and `email/mockemail` is at **100%**, including the sendgrid error-return path (see Design, above). Each handler's table test covers all four branches: success, invalid method, invalid JSON payload, and an email-service failure (via a small local `erroringMailProvider` fake, since `mockemail.Client` never fails on its own) — `TestAddPolicyCoverage` additionally asserts `CC` on the recorded send.
 
-The three pre-existing handlers (`AddPolicyVehicle`, `AddPolicyDriver`, `AddPolicyAddress`) and `main.go` are untouched by this change and left at their existing coverage — `main.go` is a thin wiring entrypoint.
+Two things are deliberately left uncovered, both untestable without either a real network listener or touching the vendored stand-in:
+- `main()`'s own body (building the real `sendgrid` client and calling `ListenAndServe`) — a thin wiring entrypoint; `newMux`, where the actual routing logic lives, is what `main_test.go` covers instead.
+- `mail.Personalization.AddBCCs` in the vendored `mail_v3.go` — BCC isn't part of this challenge's contract, and that file is marked "please do not modify".
 
 `golangci-lint run ./...` (gocyclo, gocognit, staticcheck and friends) and `go vet ./...` are both clean.

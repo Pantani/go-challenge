@@ -15,7 +15,7 @@ import (
 )
 
 // erroringMailProvider is an email.MailProvider whose sends always fail,
-// used to exercise AddPolicyCoverage's email-service error path (which the
+// used to exercise each handler's email-service error path (which the
 // always-succeeding mockemail.Client cannot trigger).
 type erroringMailProvider struct {
 	err error
@@ -35,7 +35,9 @@ func TestAddPolicyVehicle(t *testing.T) {
 
 	type testCase struct {
 		method       string
+		rawBody      []byte
 		payload      handlers.AddPolicyVehicleReq
+		sendErr      error
 		expectTplID  email.TplID
 		expectStatus int
 	}
@@ -55,23 +57,46 @@ func TestAddPolicyVehicle(t *testing.T) {
 			payload:      handlers.AddPolicyVehicleReq{},
 			expectStatus: http.StatusMethodNotAllowed,
 		},
+		"fail invalid payload": {
+			method:       http.MethodPost,
+			rawBody:      []byte(`{invalid`),
+			expectStatus: http.StatusBadRequest,
+		},
+		"fail send error": {
+			method: http.MethodPost,
+			payload: handlers.AddPolicyVehicleReq{
+				EmailTo: "foo@bar.com",
+				Message: json.RawMessage(`{"foo":"bar"}`),
+			},
+			sendErr:      errors.New("service unavailable"),
+			expectStatus: http.StatusInternalServerError,
+		},
 	}
 
 	testFactory := func(tc testCase) func(*testing.T) {
 		return func(t *testing.T) {
 
-			payload, err := json.Marshal(tc.payload)
-			if err != nil {
-				t.Fatalf("could nor marshal payload to json: %v", err)
+			body := tc.rawBody
+			if body == nil {
+				marshaled, err := json.Marshal(tc.payload)
+				if err != nil {
+					t.Fatalf("could nor marshal payload to json: %v", err)
+				}
+				body = marshaled
 			}
 
 			testEmail := mockemail.NewClient()
 			defer testEmail.FlushSendLogs()
 
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-vehicle", bytes.NewReader(payload))
+			var provider email.MailProvider = testEmail
+			if tc.sendErr != nil {
+				provider = erroringMailProvider{err: tc.sendErr}
+			}
 
-			handlers.AddPolicyVehicle(testEmail)(w, req)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-vehicle", bytes.NewReader(body))
+
+			handlers.AddPolicyVehicle(provider)(w, req)
 
 			resp := w.Result()
 
@@ -113,7 +138,9 @@ func TestAddPolicyDriver(t *testing.T) {
 
 	type testCase struct {
 		method       string
+		rawBody      []byte
 		payload      handlers.AddPolicyDriverReq
+		sendErr      error
 		expectTplID  email.TplID
 		expectStatus int
 	}
@@ -133,23 +160,46 @@ func TestAddPolicyDriver(t *testing.T) {
 			payload:      handlers.AddPolicyDriverReq{},
 			expectStatus: http.StatusMethodNotAllowed,
 		},
+		"fail invalid payload": {
+			method:       http.MethodPost,
+			rawBody:      []byte(`{invalid`),
+			expectStatus: http.StatusBadRequest,
+		},
+		"fail send error": {
+			method: http.MethodPost,
+			payload: handlers.AddPolicyDriverReq{
+				EmailTo: "foo@bar.com",
+				Message: json.RawMessage(`{"foo":"bar"}`),
+			},
+			sendErr:      errors.New("service unavailable"),
+			expectStatus: http.StatusInternalServerError,
+		},
 	}
 
 	testFactory := func(tc testCase) func(*testing.T) {
 		return func(t *testing.T) {
 
-			payload, err := json.Marshal(tc.payload)
-			if err != nil {
-				t.Fatalf("could nor marshal payload to json: %v", err)
+			body := tc.rawBody
+			if body == nil {
+				marshaled, err := json.Marshal(tc.payload)
+				if err != nil {
+					t.Fatalf("could nor marshal payload to json: %v", err)
+				}
+				body = marshaled
 			}
 
 			testEmail := mockemail.NewClient()
 			defer testEmail.FlushSendLogs()
 
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-driver", bytes.NewReader(payload))
+			var provider email.MailProvider = testEmail
+			if tc.sendErr != nil {
+				provider = erroringMailProvider{err: tc.sendErr}
+			}
 
-			handlers.AddPolicyDriver(testEmail)(w, req)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-driver", bytes.NewReader(body))
+
+			handlers.AddPolicyDriver(provider)(w, req)
 
 			resp := w.Result()
 
@@ -191,7 +241,9 @@ func TestAddPolicyAddress(t *testing.T) {
 
 	type testCase struct {
 		method       string
+		rawBody      []byte
 		payload      handlers.AddPolicyAddressReq
+		sendErr      error
 		expectTplID  email.TplID
 		expectStatus int
 	}
@@ -211,23 +263,46 @@ func TestAddPolicyAddress(t *testing.T) {
 			payload:      handlers.AddPolicyAddressReq{},
 			expectStatus: http.StatusMethodNotAllowed,
 		},
+		"fail invalid payload": {
+			method:       http.MethodPost,
+			rawBody:      []byte(`{invalid`),
+			expectStatus: http.StatusBadRequest,
+		},
+		"fail send error": {
+			method: http.MethodPost,
+			payload: handlers.AddPolicyAddressReq{
+				EmailTo: "foo@bar.com",
+				Message: json.RawMessage(`{"foo":"bar"}`),
+			},
+			sendErr:      errors.New("service unavailable"),
+			expectStatus: http.StatusInternalServerError,
+		},
 	}
 
 	testFactory := func(tc testCase) func(*testing.T) {
 		return func(t *testing.T) {
 
-			payload, err := json.Marshal(tc.payload)
-			if err != nil {
-				t.Fatalf("could nor marshal payload to json: %v", err)
+			body := tc.rawBody
+			if body == nil {
+				marshaled, err := json.Marshal(tc.payload)
+				if err != nil {
+					t.Fatalf("could nor marshal payload to json: %v", err)
+				}
+				body = marshaled
 			}
 
 			testEmail := mockemail.NewClient()
 			defer testEmail.FlushSendLogs()
 
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-address", bytes.NewReader(payload))
+			var provider email.MailProvider = testEmail
+			if tc.sendErr != nil {
+				provider = erroringMailProvider{err: tc.sendErr}
+			}
 
-			handlers.AddPolicyAddress(testEmail)(w, req)
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-address", bytes.NewReader(body))
+
+			handlers.AddPolicyAddress(provider)(w, req)
 
 			resp := w.Result()
 
