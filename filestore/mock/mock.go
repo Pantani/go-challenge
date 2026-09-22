@@ -1,7 +1,6 @@
 package mock
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -45,11 +44,8 @@ func (c *Client) Get(_ context.Context, filename string) (io.ReadCloser, string,
 
 func (c *Client) Set(_ context.Context, filename string, fileBytes []byte, _ string) error {
 	file := &MemoryFile{}
-	if _, err := io.Copy(file, bytes.NewReader(fileBytes)); err != nil {
-		return err
-	}
+	_, _ = file.Write(fileBytes)
 	c.bucket.Objects[c.key(filename)] = file
-	defer file.Close()
 	return nil
 }
 
