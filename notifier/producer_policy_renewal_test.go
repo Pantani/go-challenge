@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -45,32 +46,33 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 	validDate := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
 	testCases := map[string]struct {
-		input     any
-		wantError string
+		input   any
+		wantErr error
 	}{
 		"wrong input type": {
-			input:     "not-a-policy-renewal-input",
-			wantError: "invalid policy renewal input type",
+			input:   "not-a-policy-renewal-input",
+			wantErr: ErrInvalidPolicyRenewalInput,
 		},
 		"missing recipient": {
-			input:     PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
-			wantError: "policy renewal requires recipient",
+			input:   PolicyRenewalInput{PolicyNumber: "POL-123", RenewalDate: validDate},
+			wantErr: ErrPolicyRenewalMissingRecipient,
 		},
 		"missing policy number": {
-			input:     PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
-			wantError: "policy renewal requires policy number",
+			input:   PolicyRenewalInput{Recipient: "user@example.com", RenewalDate: validDate},
+			wantErr: ErrPolicyRenewalMissingPolicyNumber,
 		},
 		"missing renewal date": {
-			input:     PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
-			wantError: "policy renewal requires renewal date",
+			input:   PolicyRenewalInput{Recipient: "user@example.com", PolicyNumber: "POL-123"},
+			wantErr: ErrPolicyRenewalMissingRenewalDate,
 		},
 	}
 
 	// A bare err==nil check can't tell "the right validation fired" from
 	// "some other validation fired instead" -- it only proves *a* branch
-	// returned an error, not *which* branch. Pinning the exact message
-	// (and that nothing was sent) is what actually ties each case to the
-	// specific check it claims to exercise.
+	// returned an error, not *which* branch. errors.Is against the specific
+	// sentinel (and checking that nothing was sent) ties each case to the
+	// exact check it claims to exercise, without coupling the test to
+	// message wording.
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			mail := mockemail.NewClient()
@@ -79,8 +81,8 @@ func TestNotifyPolicyRenewalInvalidInput(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
-			if err.Error() != tc.wantError {
-				t.Fatalf("expected error %q, got %q", tc.wantError, err.Error())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 			if !mail.SendLogs().IsEmpty() {
 				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))

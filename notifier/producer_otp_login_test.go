@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
@@ -33,32 +34,33 @@ func TestNotifyOTPLogin(t *testing.T) {
 
 // A bare err==nil check can't tell "the right validation fired" from "some
 // other validation fired instead" -- it only proves *a* branch returned an
-// error, not *which* branch. Pinning the exact message (and that nothing
-// was sent) ties each case to the specific check it claims to exercise.
+// error, not *which* branch. errors.Is against the specific sentinel (and
+// checking that nothing was sent) ties each case to the exact check it
+// claims to exercise, without coupling the test to message wording.
 func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 	testCases := map[string]struct {
-		input     any
-		wantError string
+		input   any
+		wantErr error
 	}{
 		"wrong input type": {
-			input:     "not-an-otp-login-input",
-			wantError: "invalid otp login input type",
+			input:   "not-an-otp-login-input",
+			wantErr: ErrInvalidOTPLoginInput,
 		},
 		"missing recipient": {
-			input:     OTPLoginInput{OTPCode: "123456", ExpirationMins: 5},
-			wantError: "otp login requires recipient",
+			input:   OTPLoginInput{OTPCode: "123456", ExpirationMins: 5},
+			wantErr: ErrOTPLoginMissingRecipient,
 		},
 		"missing otp code": {
-			input:     OTPLoginInput{Recipient: "user@example.com", ExpirationMins: 5},
-			wantError: "otp login requires otp code",
+			input:   OTPLoginInput{Recipient: "user@example.com", ExpirationMins: 5},
+			wantErr: ErrOTPLoginMissingCode,
 		},
 		"zero expiration": {
-			input:     OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: 0},
-			wantError: "otp login requires valid expiration minutes",
+			input:   OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: 0},
+			wantErr: ErrOTPLoginInvalidExpiration,
 		},
 		"negative expiration": {
-			input:     OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: -1},
-			wantError: "otp login requires valid expiration minutes",
+			input:   OTPLoginInput{Recipient: "user@example.com", OTPCode: "123456", ExpirationMins: -1},
+			wantErr: ErrOTPLoginInvalidExpiration,
 		},
 	}
 
@@ -70,8 +72,8 @@ func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
-			if err.Error() != tc.wantError {
-				t.Fatalf("expected error %q, got %q", tc.wantError, err.Error())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 			if !mail.SendLogs().IsEmpty() {
 				t.Fatalf("expected no email to be sent, got %d log(s)", len(mail.SendLogs()))

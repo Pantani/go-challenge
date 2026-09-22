@@ -43,7 +43,7 @@ func NewProducer(emailProvider email.MailProvider) *Producer {
 func (p *Producer) NotifyTopic(ctx context.Context, topic string, input any) error {
 	builder, ok := p.topicBuilders[topic]
 	if !ok {
-		return fmt.Errorf("topic builder not registered: %s", topic)
+		return fmt.Errorf("%w: %s", ErrTopicNotRegistered, topic)
 	}
 	req, err := builder.BuildRequest(ctx, input)
 	if err != nil {
@@ -54,7 +54,7 @@ func (p *Producer) NotifyTopic(ctx context.Context, topic string, input any) err
 
 func (p *Producer) Notify(_ context.Context, req Request) error {
 	if len(req.Recipients) == 0 {
-		return fmt.Errorf("notification requires recipient")
+		return ErrMissingRecipients
 	}
 	return p.email.Send(req.Recipients, req.Template, req.Vars)
 }

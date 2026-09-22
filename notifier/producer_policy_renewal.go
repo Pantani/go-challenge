@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
@@ -30,16 +29,16 @@ func (policyRenewalTopicBuilder) BuildRequest(_ context.Context, input any) (Req
 
 	typedInput, ok := input.(PolicyRenewalInput)
 	if !ok {
-		return Request{}, fmt.Errorf("invalid policy renewal input type")
+		return Request{}, ErrInvalidPolicyRenewalInput
 	}
 	if typedInput.Recipient == "" {
-		return Request{}, fmt.Errorf("policy renewal requires recipient")
+		return Request{}, ErrPolicyRenewalMissingRecipient
 	}
 	if typedInput.PolicyNumber == "" {
-		return Request{}, fmt.Errorf("policy renewal requires policy number")
+		return Request{}, ErrPolicyRenewalMissingPolicyNumber
 	}
 	if typedInput.RenewalDate.IsZero() {
-		return Request{}, fmt.Errorf("policy renewal requires renewal date")
+		return Request{}, ErrPolicyRenewalMissingRenewalDate
 	}
 	return Request{
 		Topic:      TopicPolicyRenewal,

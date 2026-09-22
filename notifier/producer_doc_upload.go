@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
 )
@@ -22,13 +21,13 @@ func (docUploadTopicBuilder) BuildRequest(_ context.Context, input any) (Request
 
 	typedInput, ok := input.(DocumentUploadInput)
 	if !ok {
-		return Request{}, fmt.Errorf("invalid document upload input type")
+		return Request{}, ErrInvalidDocumentUploadInput
 	}
 	if typedInput.Recipient == "" {
-		return Request{}, fmt.Errorf("document upload requires recipient")
+		return Request{}, ErrDocumentUploadMissingRecipient
 	}
 	if typedInput.Document == "" {
-		return Request{}, fmt.Errorf("document upload requires document")
+		return Request{}, ErrDocumentUploadMissingDocument
 	}
 	return Request{
 		Topic:      TopicDocumentUpload,
