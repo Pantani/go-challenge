@@ -95,7 +95,7 @@ else
 .PHONY: test race cover vet lint complexity fmt fmt-check tidy tidy-check build check clean
 
 test: $(addprefix test-,$(MODULES)) ## Run tests for all modules
-race: $(addprefix race-,$(MODULES)) ## Run tests with the race detector for all modules
+race: $(addprefix race-,$(MODULES)) ## Run tests with the race detector and coverage for all modules (as CI)
 cover: $(addprefix cover-,$(MODULES)) ## Generate coverage reports for all modules
 vet: $(addprefix vet-,$(MODULES)) ## Run go vet for all modules
 lint: $(addprefix lint-,$(MODULES)) ## Run golangci-lint for all modules
@@ -105,7 +105,7 @@ fmt-check: $(addprefix fmt-check-,$(MODULES)) ## Fail if any module has unformat
 tidy: $(addprefix tidy-,$(MODULES)) ## Run go mod tidy for all modules
 tidy-check: $(addprefix tidy-check-,$(MODULES)) ## Fail if any go.mod/go.sum is not tidy
 build: $(addprefix build-,$(MODULES)) ## Build all modules
-check: fmt-check tidy-check vet lint complexity test ## Run every check (CI gate)
+check: fmt-check tidy-check build vet lint complexity race ## Run every check (mirrors CI)
 
 clean: ## Remove coverage reports and Docker caches
 	@# the Go module cache is read-only; make it writable before removing
@@ -122,7 +122,7 @@ test-$(1):
 
 race-$(1):
 	@echo ">> race $(1)"
-	cd $(1) && CGO_ENABLED=1 $(GO) test -race $(TESTFLAGS) ./...
+	cd $(1) && CGO_ENABLED=1 $(GO) test -race -cover $(TESTFLAGS) ./...
 
 cover-$(1):
 	@echo ">> cover $(1)"
@@ -178,7 +178,7 @@ build-$(1):
 	@echo ">> build $(1)"
 	cd $(1) && $(GO) build ./...
 
-check-$(1): fmt-check-$(1) tidy-check-$(1) vet-$(1) lint-$(1) complexity-$(1) test-$(1)
+check-$(1): fmt-check-$(1) tidy-check-$(1) build-$(1) vet-$(1) lint-$(1) complexity-$(1) race-$(1)
 endef
 
 $(foreach m,$(MODULES),$(eval $(call MODULE_RULES,$(m))))
