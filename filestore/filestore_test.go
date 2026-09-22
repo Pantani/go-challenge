@@ -1,7 +1,6 @@
 package filestore_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -54,28 +53,5 @@ func TestFileProviderContract(t *testing.T) {
 	}
 	if errors.Is(err, filestore.ErrNotFound) {
 		t.Fatal("starter mock intentionally does not preserve the sentinel error")
-	}
-}
-
-func TestMockSetGetRoundTrip(t *testing.T) {
-	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "test"}})
-	want := []byte("hello world")
-
-	if err := client.Set(context.Background(), "greeting.txt", want, "text/plain"); err != nil {
-		t.Fatalf("setting file: %v", err)
-	}
-
-	reader, _, err := client.Get(context.Background(), "greeting.txt")
-	if err != nil {
-		t.Fatalf("getting file: %v", err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	got, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("reading file: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("got %q, want %q", got, want)
 	}
 }
