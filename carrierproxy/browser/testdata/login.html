@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head><title>Fixture Login</title></head>
+<body>
+  <form method="post" action="/login">
+    <input type="text" name="username" id="username">
+    <input type="password" name="password" id="password">
+    <button type="submit">Login</button>
+  </form>
+  {{if .Flash}}<div id="flash" class="flash {{.Flash.Class}}">{{.Flash.Message}}</div>{{end}}
+</body>
+</html>
