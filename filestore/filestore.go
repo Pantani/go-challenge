@@ -11,6 +11,7 @@ type FileProvider interface {
 	Set(ctx context.Context, filename string, fileBytes []byte, contentType string) error
 	Purge(ctx context.Context, filename string) error
 	Move(ctx context.Context, oldFilename, newFilename string) error
+	Copy(ctx context.Context, oldFilename, newFilename string) error
 }
 
 type PresignedFileProvider interface {

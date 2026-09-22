@@ -8,9 +8,13 @@ import (
 )
 
 func main() {
-	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "local"}})
-	if err := client.Purge(context.Background(), "example.txt"); err != nil {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 	log.Print("filestore challenge ready")
+}
+
+func run() error {
+	client := mock.NewClient(mock.Config{Bucket: mock.Bucket{Name: "local"}})
+	return client.Purge(context.Background(), "example.txt")
 }
