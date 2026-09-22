@@ -1,7 +1,11 @@
+// Package sendgrid implements email.MailProvider on top of the sendgrid v3
+// mail client.
 package sendgrid
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 
@@ -9,6 +13,10 @@ import (
 	// In a real project this would be vendored as github.com/sendgrid/sendgrid-go
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/sendgrid/mail"
 )
+
+// ErrNoRecipients is returned when a send is attempted without any To
+// recipient.
+var ErrNoRecipients = errors.New("sendgrid: at least one To recipient is required")
 
 // Config holds the sender identity and credentials used to build a Client.
 type Config struct {
@@ -54,8 +62,13 @@ func (c *Client) SendWithCC(to, cc []string, message json.RawMessage, tpl email.
 }
 
 // send builds the v3 mail message for to/cc and dispatches it through the
-// underlying mail client.
+// underlying mail client. It refuses to build a message with no To
+// recipient rather than hand the provider an undeliverable request.
 func (c *Client) send(to, cc []string, message json.RawMessage, tpl email.TplID) error {
+
+	if len(to) == 0 {
+		return ErrNoRecipients
+	}
 
 	// create personalization
 	p := mail.NewPersonalization().
@@ -71,5 +84,9 @@ func (c *Client) send(to, cc []string, message json.RawMessage, tpl email.TplID)
 		AddPersonalization(p)
 
 	// send the email
-	return c.client.Send(m)
+	if err := c.client.Send(m); err != nil {
+		return fmt.Errorf("sendgrid: send failed: %w", err)
+	}
+
+	return nil
 }

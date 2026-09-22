@@ -44,30 +44,37 @@ func WithSubmitSelector(selector string) Option {
 }
 
 // WithResultSelector overrides the CSS selector used to locate the
-// post-submit result banner. Defaults to "#flash".
+// post-submit result banner. It should match an element that only exists
+// once the site has responded to the submission, since it is waited for
+// as soon as the form is submitted. Defaults to "#flash".
 func WithResultSelector(selector string) Option {
 	return func(o *options) { o.resultSelector = selector }
 }
 
-// WithSuccessClass overrides the CSS class substring that marks the result
-// banner as a success rather than a failure. Defaults to "success".
+// WithSuccessClass overrides the CSS class that marks the result banner as
+// a success rather than a failure; it must match a whole class token
+// ("success" does not match "unsuccessful") and must not be empty (Login
+// returns carrierproxy.ErrNotConfigured). Defaults to "success".
 func WithSuccessClass(class string) Option {
 	return func(o *options) { o.successClass = class }
 }
 
 // WithTimeout overrides the time budget for a single attempt (one Login,
 // Policies or DocumentDownload call, one retry not included), covering
-// navigation, form-filling and reading the result. Defaults to 30 seconds.
+// navigation, form-filling and reading the result. For DocumentDownload
+// the same budget separately bounds the HTTP download, including reading
+// the returned body to its end. Defaults to 30 seconds.
 func WithTimeout(d time.Duration) Option {
 	return func(o *options) { o.timeout = d }
 }
 
 // WithRetries overrides how many additional attempts are made after a
-// non-credential failure (browser launch, navigation, a not-yet-rendered
-// form, ...) in Login, or after re-authenticating for Policies or
-// DocumentDownload. carrierproxy.ErrInvalidCredentials is never retried,
-// since the same credentials would just fail again. 0 disables retries.
-// Defaults to 2 (3 attempts total).
+// transient failure (browser launch, navigation, a not-yet-rendered form,
+// ...) in Login, or after re-authenticating for Policies or
+// DocumentDownload. carrierproxy.ErrInvalidCredentials,
+// carrierproxy.ErrMalformedResponse and carrierproxy.ErrNotConfigured are
+// never retried, since the same attempt would just fail again. 0 disables
+// retries. Defaults to 2 (3 attempts total).
 func WithRetries(n int) Option {
 	return func(o *options) { o.retries = n }
 }

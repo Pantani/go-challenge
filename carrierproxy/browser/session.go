@@ -39,6 +39,10 @@ func (c *Client) storedCredentials() (credentials, error) {
 // the caller owns the returned page and must call the returned func to
 // release it; on failure the page is already released.
 func (c *Client) authenticatedPage(username, password string) (page, func(), error) {
+	if err := validateLoginOptions(c.opts); err != nil {
+		return nil, nil, err
+	}
+
 	pg, closePage, err := c.newPage(c.opts.timeout)
 	if err != nil {
 		return nil, nil, fmt.Errorf("carrierproxy: open browser page: %w", err)
@@ -73,13 +77,40 @@ func (c *Client) withRetries(attempt func() error) error {
 	return err
 }
 
-// isFinal reports whether err would just happen again on a retry:
-// carrierproxy.ErrInvalidCredentials means the same credentials would
-// fail the same way, and carrierproxy.ErrMalformedResponse means the
-// target's response didn't match the expected shape, which retrying
-// won't reshape.
+// attemptWithRetries is withRetries for an attempt that also produces a
+// value: it returns the value from the attempt that succeeded, or the zero
+// value alongside the last error once retries are exhausted.
+func attemptWithRetries[T any](c *Client, attempt func() (T, error)) (T, error) {
+	var result T
+	err := c.withRetries(func() error {
+		var attemptErr error
+		result, attemptErr = attempt()
+		return attemptErr
+	})
+	return result, err
+}
+
+// finalErrors are the failures a retry would only repeat:
+// carrierproxy.ErrInvalidCredentials means the same credentials would fail
+// the same way, carrierproxy.ErrMalformedResponse means the target's
+// response didn't match the expected shape, which retrying won't reshape,
+// and carrierproxy.ErrNotConfigured means the Client itself is missing
+// something no attempt can supply.
+var finalErrors = []error{
+	carrierproxy.ErrInvalidCredentials,
+	carrierproxy.ErrMalformedResponse,
+	carrierproxy.ErrNotConfigured,
+}
+
+// isFinal reports whether err is (or wraps) one of finalErrors, i.e. would
+// just happen again on a retry.
 func isFinal(err error) bool {
-	return errors.Is(err, carrierproxy.ErrInvalidCredentials) || errors.Is(err, carrierproxy.ErrMalformedResponse)
+	for _, final := range finalErrors {
+		if errors.Is(err, final) {
+			return true
+		}
+	}
+	return false
 }
 
 // attemptBudget returns how many attempts to make for a given retries

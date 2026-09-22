@@ -31,6 +31,9 @@ func TestNotifyOTPLogin(t *testing.T) {
 	assertEqual(t, "recipient", "user@example.com", last.To)
 	assertEqual(t, "template", email.TplOTPLogin, last.Tpl)
 	assertEqual(t, "otp code", "123456", last.Vars["otpCode"])
+	// The template renders how long the code stays valid, so the validated
+	// expiry must reach the provider too.
+	assertEqual(t, "expiration minutes", 5, last.Vars["expirationMins"])
 }
 
 // A bare err==nil check can't tell "the right validation fired" from "some
@@ -70,9 +73,6 @@ func TestNotifyOTPLoginInvalidInput(t *testing.T) {
 			mail := mockemail.NewClient()
 
 			err := notifier.NewProducer(mail).NotifyTopic(context.Background(), notifier.TopicOTPLogin, tc.input)
-			if err == nil {
-				t.Fatalf("expected error for %s", name)
-			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}

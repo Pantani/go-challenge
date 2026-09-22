@@ -41,6 +41,17 @@ func (c *Client) loginOnce(username, password string) error {
 	return nil
 }
 
+// validateLoginOptions rejects options that no login attempt could
+// succeed with, before a browser is ever launched: an empty success class
+// can never match a banner, so every attempt would be misreported as
+// rejected credentials.
+func validateLoginOptions(opts options) error {
+	if opts.successClass == "" {
+		return fmt.Errorf("%w: WithSuccessClass must not be empty", carrierproxy.ErrNotConfigured)
+	}
+	return nil
+}
+
 // validateCredentials rejects a blank username or password before a
 // browser is ever launched.
 func validateCredentials(username, password string) error {
@@ -87,12 +98,9 @@ func clickSubmit(pg page, selector string) error {
 }
 
 // evaluateLoginResult reads the post-submit result banner and turns it into
-// a Go error, using its CSS class to tell success from failure.
+// a Go error, using its CSS class to tell success from failure. opts must
+// have passed validateLoginOptions.
 func evaluateLoginResult(pg page, opts options) error {
-	if opts.successClass == "" {
-		return fmt.Errorf("%w: WithSuccessClass must not be empty", carrierproxy.ErrNotConfigured)
-	}
-
 	el, err := pg.Element(opts.resultSelector)
 	if err != nil {
 		return fmt.Errorf("carrierproxy: locate result banner: %w", err)

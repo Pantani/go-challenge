@@ -4,16 +4,19 @@ import (
 	"encoding/json"
 )
 
+// AddPolicyVehicleReq is the add-policy-vehicle payload.
 type AddPolicyVehicleReq struct {
 	EmailTo string          `json:"email_to"`
 	Message json.RawMessage `json:"message"`
 }
 
+// AddPolicyDriverReq is the add-policy-driver payload.
 type AddPolicyDriverReq struct {
 	EmailTo string          `json:"email_to"`
 	Message json.RawMessage `json:"message"`
 }
 
+// AddPolicyAddressReq is the add-policy-address payload.
 type AddPolicyAddressReq struct {
 	EmailTo string          `json:"email_to"`
 	Message json.RawMessage `json:"message"`

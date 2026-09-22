@@ -1,7 +1,6 @@
 package notifier
 
 import (
-	"context"
 	"time"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/notifier/channels/email"
@@ -18,35 +17,27 @@ type PolicyRenewalInput struct {
 	RenewalDate  time.Time
 }
 
-type policyRenewalTopicBuilder struct{}
+var policyRenewalTopicBuilder = topicBuilder[PolicyRenewalInput]{
+	topic:           TopicPolicyRenewal,
+	tpl:             email.TplPolicyRenewal,
+	errInvalidInput: ErrInvalidPolicyRenewalInput,
+	build:           buildPolicyRenewal,
+}
 
-// Topic returns the notification topic key this builder handles.
-func (policyRenewalTopicBuilder) Topic() string { return TopicPolicyRenewal }
-
-// BuildRequest validates a PolicyRenewalInput and builds the email Request
-// for a policy renewal reminder.
-func (policyRenewalTopicBuilder) BuildRequest(_ context.Context, input any) (Request, error) {
-
-	typedInput, ok := input.(PolicyRenewalInput)
-	if !ok {
-		return Request{}, ErrInvalidPolicyRenewalInput
+// buildPolicyRenewal validates a PolicyRenewalInput and returns the template
+// variables: policyNumber and renewalDate formatted as YYYY-MM-DD.
+func buildPolicyRenewal(in PolicyRenewalInput) (string, map[string]any, error) {
+	if in.Recipient == "" {
+		return "", nil, ErrPolicyRenewalMissingRecipient
 	}
-	if typedInput.Recipient == "" {
-		return Request{}, ErrPolicyRenewalMissingRecipient
+	if in.PolicyNumber == "" {
+		return "", nil, ErrPolicyRenewalMissingPolicyNumber
 	}
-	if typedInput.PolicyNumber == "" {
-		return Request{}, ErrPolicyRenewalMissingPolicyNumber
+	if in.RenewalDate.IsZero() {
+		return "", nil, ErrPolicyRenewalMissingRenewalDate
 	}
-	if typedInput.RenewalDate.IsZero() {
-		return Request{}, ErrPolicyRenewalMissingRenewalDate
-	}
-	return Request{
-		Topic:      TopicPolicyRenewal,
-		Recipients: []string{typedInput.Recipient},
-		Template:   email.TplPolicyRenewal,
-		Vars: map[string]any{
-			"policyNumber": typedInput.PolicyNumber,
-			"renewalDate":  typedInput.RenewalDate.Format("2006-01-02"),
-		},
+	return in.Recipient, map[string]any{
+		"policyNumber": in.PolicyNumber,
+		"renewalDate":  in.RenewalDate.Format("2006-01-02"),
 	}, nil
 }

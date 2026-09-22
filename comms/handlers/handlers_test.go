@@ -4,15 +4,27 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/email/mockemail"
 	"github.com/gloveboxhq/glovebox-go-code-challenge/comms/handlers"
 )
+
+// TestMain silences the handlers' send-error log line so the failure-path
+// cases do not clutter test output; TestSendErrorIsLoggedNotEchoed swaps
+// in its own writer to assert on that line.
+func TestMain(m *testing.M) {
+	log.SetOutput(io.Discard)
+	os.Exit(m.Run())
+}
 
 // erroringMailProvider is an email.MailProvider whose sends always fail,
 // used to exercise each handler's email-service error path (which the
@@ -29,64 +41,136 @@ func (p erroringMailProvider) SendWithCC([]string, []string, json.RawMessage, em
 	return p.err
 }
 
-func TestAddPolicyVehicle(t *testing.T) {
+// handlerCase is one request/response expectation shared by every handler.
+type handlerCase struct {
+	method       string
+	body         string
+	sendErr      error
+	expectStatus int
+	expectBody   string // exact response body (http.Error appends "\n"); "" skips the check
+	expectTo     string // recorded To recipient on a 200
+	expectCC     []string
+	expectMsg    string
+}
 
-	t.Parallel()
+const validBody = `{"email_to":"foo@bar.com","message":{"foo":"bar"}}`
 
-	type testCase struct {
-		method       string
-		rawBody      []byte
-		payload      handlers.AddPolicyVehicleReq
-		sendErr      error
-		expectTplID  email.TplID
-		expectStatus int
-	}
-
-	testCases := map[string]testCase{
+// commonCases are the behaviours every comms handler must share: they are
+// run verbatim against all four handlers.
+func commonCases() map[string]handlerCase {
+	return map[string]handlerCase{
 		"pass": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyVehicleReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			expectTplID:  email.TplAddPolicyVehicle,
+			method:       http.MethodPost,
+			body:         validBody,
 			expectStatus: http.StatusOK,
+			expectTo:     "foo@bar.com",
+			expectMsg:    `{"foo":"bar"}`,
+		},
+		"pass trims email_to": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"  foo@bar.com \n","message":{"foo":"bar"}}`,
+			expectStatus: http.StatusOK,
+			expectTo:     "foo@bar.com",
+			expectMsg:    `{"foo":"bar"}`,
 		},
 		"fail invalid method": {
 			method:       http.MethodGet,
-			payload:      handlers.AddPolicyVehicleReq{},
+			body:         validBody,
 			expectStatus: http.StatusMethodNotAllowed,
+			expectBody:   "method not allowed\n",
 		},
 		"fail invalid payload": {
 			method:       http.MethodPost,
-			rawBody:      []byte(`{invalid`),
+			body:         `{invalid`,
 			expectStatus: http.StatusBadRequest,
+			expectBody:   "invalid payload\n",
+		},
+		"fail wrong type for email_to": {
+			method:       http.MethodPost,
+			body:         `{"email_to":["foo@bar.com"],"message":{}}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "invalid payload\n",
+		},
+		"fail trailing json value": {
+			method:       http.MethodPost,
+			body:         validBody + `{"email_to":"other@bar.com"}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "invalid payload: unexpected data after JSON value\n",
+		},
+		"fail trailing garbage": {
+			method:       http.MethodPost,
+			body:         validBody + ` garbage`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "invalid payload: unexpected data after JSON value\n",
+		},
+		"fail body too large": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"foo@bar.com","message":{"pad":"` + strings.Repeat("x", 1<<20) + `"}}`,
+			expectStatus: http.StatusRequestEntityTooLarge,
+			expectBody:   "request body too large\n",
+		},
+		"fail oversized trailing data": {
+			method:       http.MethodPost,
+			body:         validBody + strings.Repeat(" ", 1<<20),
+			expectStatus: http.StatusRequestEntityTooLarge,
+			expectBody:   "request body too large\n",
+		},
+		"fail missing email_to": {
+			method:       http.MethodPost,
+			body:         `{"message":{"foo":"bar"}}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "email_to: is required\n",
+		},
+		"fail blank email_to": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"   ","message":{"foo":"bar"}}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "email_to: is required\n",
+		},
+		"fail malformed email_to": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"not-an-email","message":{"foo":"bar"}}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "email_to: is not a valid email address\n",
+		},
+		"fail display-name email_to": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"Foo <foo@bar.com>","message":{"foo":"bar"}}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "email_to: must be a bare email address\n",
+		},
+		"fail missing message": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"foo@bar.com"}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "message: is required\n",
+		},
+		"fail null message": {
+			method:       http.MethodPost,
+			body:         `{"email_to":"foo@bar.com","message":null}`,
+			expectStatus: http.StatusBadRequest,
+			expectBody:   "message: is required\n",
 		},
 		"fail send error": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyVehicleReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			sendErr:      errors.New("service unavailable"),
+			method:       http.MethodPost,
+			body:         validBody,
+			sendErr:      errors.New("secret provider detail"),
 			expectStatus: http.StatusInternalServerError,
+			expectBody:   "error sending email\n",
 		},
 	}
+}
 
-	testFactory := func(tc testCase) func(*testing.T) {
-		return func(t *testing.T) {
+// runHandlerCases drives every case through the handler built by ctor and
+// asserts on the response and on what the mock provider recorded.
+func runHandlerCases(t *testing.T, ctor func(email.MailProvider) http.HandlerFunc, tpl email.TplID, cases map[string]handlerCase) {
+	t.Helper()
 
-			body := tc.rawBody
-			if body == nil {
-				marshaled, err := json.Marshal(tc.payload)
-				if err != nil {
-					t.Fatalf("could nor marshal payload to json: %v", err)
-				}
-				body = marshaled
-			}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
 			testEmail := mockemail.NewClient()
-			defer testEmail.FlushSendLogs()
 
 			var provider email.MailProvider = testEmail
 			if tc.sendErr != nil {
@@ -94,364 +178,200 @@ func TestAddPolicyVehicle(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-vehicle", bytes.NewReader(body))
+			req := httptest.NewRequest(tc.method, "/api/comms/"+string(tpl), strings.NewReader(tc.body))
 
-			handlers.AddPolicyVehicle(provider)(w, req)
+			ctor(provider)(w, req)
 
 			resp := w.Result()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != tc.expectStatus {
 				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
 			}
 
-			if resp.StatusCode == http.StatusOK {
-
-				if testEmail.SendLogs().IsEmpty() {
-					t.Fatalf("expected email log but got empty")
-				}
-
-				lastEmail := testEmail.SendLogs().Last()
-
-				if lastEmail.ExtractTo() != tc.payload.EmailTo {
-					t.Fatalf("expected to %v but got %v", tc.payload.EmailTo, lastEmail.ExtractTo())
-				}
-
-				if string(lastEmail.ExtractMessage()) != string(tc.payload.Message) {
-					t.Fatalf("expected message %v but got %v", tc.payload.Message, lastEmail.ExtractMessage())
-				}
-
-				if lastEmail.ExtractTplID() != tc.expectTplID {
-					t.Fatalf("expected tpl %v but got %v", tc.expectTplID, lastEmail.ExtractTplID())
-				}
-			} else if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
+			body, _ := io.ReadAll(resp.Body)
+			if tc.expectBody != "" && string(body) != tc.expectBody {
+				t.Fatalf("expected body %q but got %q", tc.expectBody, body)
 			}
-		}
+
+			if resp.StatusCode == http.StatusMethodNotAllowed && resp.Header.Get("Allow") != http.MethodPost {
+				t.Fatalf("expected Allow header %q but got %q", http.MethodPost, resp.Header.Get("Allow"))
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				if !testEmail.SendLogs().IsEmpty() {
+					t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
+				}
+				return
+			}
+
+			assertLastSend(t, testEmail, tpl, tc)
+		})
+	}
+}
+
+// assertLastSend checks the single send the handler should have recorded.
+func assertLastSend(t *testing.T, testEmail *mockemail.Client, tpl email.TplID, tc handlerCase) {
+	t.Helper()
+
+	logs := testEmail.SendLogs()
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly one recorded send but got %d", len(logs))
 	}
 
-	for name, tc := range testCases {
-		t.Run(name, testFactory(tc))
+	last := logs.Last()
+
+	if last.ExtractTo() != tc.expectTo {
+		t.Fatalf("expected to %q but got %q", tc.expectTo, last.ExtractTo())
 	}
+
+	if !reflect.DeepEqual(last.ExtractCC(), tc.expectCC) {
+		t.Fatalf("expected cc %v but got %v", tc.expectCC, last.ExtractCC())
+	}
+
+	if string(last.ExtractMessage()) != tc.expectMsg {
+		t.Fatalf("expected message %s but got %s", tc.expectMsg, last.ExtractMessage())
+	}
+
+	if last.ExtractTplID() != tpl {
+		t.Fatalf("expected tpl %v but got %v", tpl, last.ExtractTplID())
+	}
+}
+
+func TestAddPolicyVehicle(t *testing.T) {
+	t.Parallel()
+	runHandlerCases(t, handlers.AddPolicyVehicle, email.TplAddPolicyVehicle, commonCases())
 }
 
 func TestAddPolicyDriver(t *testing.T) {
-
 	t.Parallel()
-
-	type testCase struct {
-		method       string
-		rawBody      []byte
-		payload      handlers.AddPolicyDriverReq
-		sendErr      error
-		expectTplID  email.TplID
-		expectStatus int
-	}
-
-	testCases := map[string]testCase{
-		"pass": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyDriverReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			expectTplID:  email.TplAddPolicyDriver,
-			expectStatus: http.StatusOK,
-		},
-		"fail invalid method": {
-			method:       http.MethodGet,
-			payload:      handlers.AddPolicyDriverReq{},
-			expectStatus: http.StatusMethodNotAllowed,
-		},
-		"fail invalid payload": {
-			method:       http.MethodPost,
-			rawBody:      []byte(`{invalid`),
-			expectStatus: http.StatusBadRequest,
-		},
-		"fail send error": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyDriverReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			sendErr:      errors.New("service unavailable"),
-			expectStatus: http.StatusInternalServerError,
-		},
-	}
-
-	testFactory := func(tc testCase) func(*testing.T) {
-		return func(t *testing.T) {
-
-			body := tc.rawBody
-			if body == nil {
-				marshaled, err := json.Marshal(tc.payload)
-				if err != nil {
-					t.Fatalf("could nor marshal payload to json: %v", err)
-				}
-				body = marshaled
-			}
-
-			testEmail := mockemail.NewClient()
-			defer testEmail.FlushSendLogs()
-
-			var provider email.MailProvider = testEmail
-			if tc.sendErr != nil {
-				provider = erroringMailProvider{err: tc.sendErr}
-			}
-
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-driver", bytes.NewReader(body))
-
-			handlers.AddPolicyDriver(provider)(w, req)
-
-			resp := w.Result()
-
-			if resp.StatusCode != tc.expectStatus {
-				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
-			}
-
-			if resp.StatusCode == http.StatusOK {
-
-				if testEmail.SendLogs().IsEmpty() {
-					t.Fatalf("expected email log but got empty")
-				}
-
-				lastEmail := testEmail.SendLogs().Last()
-
-				if lastEmail.ExtractTo() != tc.payload.EmailTo {
-					t.Fatalf("expected to %v but got %v", tc.payload.EmailTo, lastEmail.ExtractTo())
-				}
-
-				if string(lastEmail.ExtractMessage()) != string(tc.payload.Message) {
-					t.Fatalf("expected message %v but got %v", tc.payload.Message, lastEmail.ExtractMessage())
-				}
-
-				if lastEmail.ExtractTplID() != tc.expectTplID {
-					t.Fatalf("expected tpl %v but got %v", tc.expectTplID, lastEmail.ExtractTplID())
-				}
-			} else if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
-			}
-		}
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, testFactory(tc))
-	}
+	runHandlerCases(t, handlers.AddPolicyDriver, email.TplAddPolicyDriver, commonCases())
 }
 
 func TestAddPolicyAddress(t *testing.T) {
-
 	t.Parallel()
-
-	type testCase struct {
-		method       string
-		rawBody      []byte
-		payload      handlers.AddPolicyAddressReq
-		sendErr      error
-		expectTplID  email.TplID
-		expectStatus int
-	}
-
-	testCases := map[string]testCase{
-		"pass": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyAddressReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			expectTplID:  email.TplAddPolicyAddress,
-			expectStatus: http.StatusOK,
-		},
-		"fail invalid method": {
-			method:       http.MethodGet,
-			payload:      handlers.AddPolicyAddressReq{},
-			expectStatus: http.StatusMethodNotAllowed,
-		},
-		"fail invalid payload": {
-			method:       http.MethodPost,
-			rawBody:      []byte(`{invalid`),
-			expectStatus: http.StatusBadRequest,
-		},
-		"fail send error": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyAddressReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			sendErr:      errors.New("service unavailable"),
-			expectStatus: http.StatusInternalServerError,
-		},
-	}
-
-	testFactory := func(tc testCase) func(*testing.T) {
-		return func(t *testing.T) {
-
-			body := tc.rawBody
-			if body == nil {
-				marshaled, err := json.Marshal(tc.payload)
-				if err != nil {
-					t.Fatalf("could nor marshal payload to json: %v", err)
-				}
-				body = marshaled
-			}
-
-			testEmail := mockemail.NewClient()
-			defer testEmail.FlushSendLogs()
-
-			var provider email.MailProvider = testEmail
-			if tc.sendErr != nil {
-				provider = erroringMailProvider{err: tc.sendErr}
-			}
-
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-address", bytes.NewReader(body))
-
-			handlers.AddPolicyAddress(provider)(w, req)
-
-			resp := w.Result()
-
-			if resp.StatusCode != tc.expectStatus {
-				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
-			}
-
-			if resp.StatusCode == http.StatusOK {
-
-				if testEmail.SendLogs().IsEmpty() {
-					t.Fatalf("expected email log but got empty")
-				}
-
-				lastEmail := testEmail.SendLogs().Last()
-
-				if lastEmail.ExtractTo() != tc.payload.EmailTo {
-					t.Fatalf("expected to %v but got %v", tc.payload.EmailTo, lastEmail.ExtractTo())
-				}
-
-				if string(lastEmail.ExtractMessage()) != string(tc.payload.Message) {
-					t.Fatalf("expected message %v but got %v", tc.payload.Message, lastEmail.ExtractMessage())
-				}
-
-				if lastEmail.ExtractTplID() != tc.expectTplID {
-					t.Fatalf("expected tpl %v but got %v", tc.expectTplID, lastEmail.ExtractTplID())
-				}
-			} else if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
-			}
-		}
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, testFactory(tc))
-	}
+	runHandlerCases(t, handlers.AddPolicyAddress, email.TplAddPolicyAddress, commonCases())
 }
 
+// TestAddPolicyCoverage proves the new handler meets the shared contract and
+// additionally the CC business rules: CC recipients are copied on the send,
+// each CC entry is validated with its index, and the list is normalised
+// (trimmed, de-duplicated case-insensitively, never repeating the To
+// address) before delivery.
 func TestAddPolicyCoverage(t *testing.T) {
-
 	t.Parallel()
 
-	type testCase struct {
-		method       string
-		rawBody      []byte
-		payload      handlers.AddPolicyCoverageReq
-		sendErr      error
-		expectStatus int
+	cases := commonCases()
+
+	cases["pass with cc"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["cc1@bar.com","cc2@bar.com"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectCC:     []string{"cc1@bar.com", "cc2@bar.com"},
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["pass with empty cc list"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":[],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["pass with null cc"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":null,"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["pass cc trimmed and deduplicated case-insensitively"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":[" cc@bar.com ","CC@bar.com","other@bar.com","cc@BAR.com"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectCC:     []string{"cc@bar.com", "other@bar.com"},
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["pass cc equal to email_to is dropped"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["Foo@Bar.com","cc@bar.com"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectCC:     []string{"cc@bar.com"},
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["pass cc collapsing entirely into email_to sends without cc"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["foo@bar.com","FOO@BAR.COM"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusOK,
+		expectTo:     "foo@bar.com",
+		expectMsg:    `{"foo":"bar"}`,
+	}
+	cases["fail blank cc entry"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["cc1@bar.com",""],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusBadRequest,
+		expectBody:   "email_cc[1]: is required\n",
+	}
+	cases["fail malformed cc entry"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["nope"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusBadRequest,
+		expectBody:   "email_cc[0]: is not a valid email address\n",
+	}
+	cases["fail display-name cc entry"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["cc1@bar.com","cc2@bar.com","CC <cc3@bar.com>"],"message":{"foo":"bar"}}`,
+		expectStatus: http.StatusBadRequest,
+		expectBody:   "email_cc[2]: must be a bare email address\n",
+	}
+	cases["fail wrong type for email_cc"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":"cc@bar.com","message":{"foo":"bar"}}`,
+		expectStatus: http.StatusBadRequest,
+		expectBody:   "invalid payload\n",
+	}
+	cases["fail send error with cc"] = handlerCase{
+		method:       http.MethodPost,
+		body:         `{"email_to":"foo@bar.com","email_cc":["cc@bar.com"],"message":{"foo":"bar"}}`,
+		sendErr:      errors.New("secret provider detail"),
+		expectStatus: http.StatusInternalServerError,
+		expectBody:   "error sending email\n",
 	}
 
-	testCases := map[string]testCase{
-		"pass": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyCoverageReq{
-				EmailTo: "foo@bar.com",
-				EmailCC: []string{"cc1@bar.com", "cc2@bar.com"},
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			expectStatus: http.StatusOK,
-		},
-		"fail invalid method": {
-			method:       http.MethodGet,
-			payload:      handlers.AddPolicyCoverageReq{},
-			expectStatus: http.StatusMethodNotAllowed,
-		},
-		"fail invalid payload": {
-			method:       http.MethodPost,
-			rawBody:      []byte(`{invalid`),
-			expectStatus: http.StatusBadRequest,
-		},
-		"fail send error": {
-			method: http.MethodPost,
-			payload: handlers.AddPolicyCoverageReq{
-				EmailTo: "foo@bar.com",
-				Message: json.RawMessage(`{"foo":"bar"}`),
-			},
-			sendErr:      errors.New("service unavailable"),
-			expectStatus: http.StatusInternalServerError,
-		},
+	runHandlerCases(t, handlers.AddPolicyCoverage, email.TplAddPolicyCoverage, cases)
+}
+
+// TestSendErrorIsLoggedNotEchoed pins the 500 contract: the provider's error
+// reaches the server log for operators but never the HTTP response body.
+func TestSendErrorIsLoggedNotEchoed(t *testing.T) {
+	// Not parallel: swaps the process-wide log output.
+
+	var logs bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/comms/add-policy-coverage", strings.NewReader(validBody))
+
+	handlers.AddPolicyCoverage(erroringMailProvider{err: errors.New("secret provider detail")})(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %v but got %v", http.StatusInternalServerError, w.Code)
 	}
 
-	testFactory := func(tc testCase) func(*testing.T) {
-		return func(t *testing.T) {
-
-			body := tc.rawBody
-			if body == nil {
-				marshaled, err := json.Marshal(tc.payload)
-				if err != nil {
-					t.Fatalf("could nor marshal payload to json: %v", err)
-				}
-				body = marshaled
-			}
-
-			testEmail := mockemail.NewClient()
-			defer testEmail.FlushSendLogs()
-
-			if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected a fresh mock client to have no recorded sends")
-			}
-
-			var provider email.MailProvider = testEmail
-			if tc.sendErr != nil {
-				provider = erroringMailProvider{err: tc.sendErr}
-			}
-
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, "/api/comms/add-policy-coverage", bytes.NewReader(body))
-
-			handlers.AddPolicyCoverage(provider)(w, req)
-
-			resp := w.Result()
-
-			if resp.StatusCode != tc.expectStatus {
-				t.Fatalf("expected status %v but got %v", tc.expectStatus, resp.StatusCode)
-			}
-
-			if resp.StatusCode == http.StatusOK {
-
-				if testEmail.SendLogs().IsEmpty() {
-					t.Fatalf("expected email log but got empty")
-				}
-
-				lastEmail := testEmail.SendLogs().Last()
-
-				if lastEmail.ExtractTo() != tc.payload.EmailTo {
-					t.Fatalf("expected to %v but got %v", tc.payload.EmailTo, lastEmail.ExtractTo())
-				}
-
-				if !reflect.DeepEqual(lastEmail.ExtractCC(), tc.payload.EmailCC) {
-					t.Fatalf("expected cc %v but got %v", tc.payload.EmailCC, lastEmail.ExtractCC())
-				}
-
-				if string(lastEmail.ExtractMessage()) != string(tc.payload.Message) {
-					t.Fatalf("expected message %v but got %v", tc.payload.Message, lastEmail.ExtractMessage())
-				}
-
-				if lastEmail.ExtractTplID() != email.TplAddPolicyCoverage {
-					t.Fatalf("expected tpl %v but got %v", email.TplAddPolicyCoverage, lastEmail.ExtractTplID())
-				}
-			} else if !testEmail.SendLogs().IsEmpty() {
-				t.Fatalf("expected no email to be sent but got %v", testEmail.SendLogs())
-			}
-		}
+	if strings.Contains(w.Body.String(), "secret provider detail") {
+		t.Fatalf("provider error leaked into response body: %q", w.Body.String())
 	}
 
-	for name, tc := range testCases {
-		t.Run(name, testFactory(tc))
+	want := "handlers: add-policy-coverage: error sending email: secret provider detail\n"
+	if logs.String() != want {
+		t.Fatalf("expected log %q but got %q", want, logs.String())
 	}
 }

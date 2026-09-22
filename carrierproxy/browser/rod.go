@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -60,30 +61,40 @@ func launchPage(timeout time.Duration) (page, func(), error) {
 	b := rod.New().ControlURL(controlURL)
 	if err := b.Connect(); err != nil {
 		// Launch already started the browser process; Connect merely
-		// failed to dial it, so unlike release() below (which needs a
-		// live CDP connection to ask the browser to close itself) the
-		// launcher itself has to be the one to kill it, or it leaks.
+		// failed to dial it, so unlike release (which first asks the
+		// browser to close itself over CDP) the launcher itself has to
+		// be the one to kill it, or it leaks.
 		killAndCleanup(l)
 		return nil, nil, fmt.Errorf("carrierproxy: connect browser: %w", err)
 	}
 
-	// b.Close() only asks the browser to exit; it leaves the temporary
-	// profile directory Launch created behind. l.Cleanup() waits for the
-	// browser to actually exit and removes that directory, so every
-	// launch this function returns successfully from must be paired with
-	// a release() call, on both the success and page-open-failure paths.
-	release := func() {
-		_ = b.Close()
-		l.Cleanup()
-	}
-
 	rodPg, err := b.Page(proto.TargetCreateTarget{})
 	if err != nil {
-		release()
+		release(b, l, func() {})
 		return nil, nil, fmt.Errorf("carrierproxy: open page: %w", err)
 	}
 
-	return rodPage{p: rodPg.Timeout(timeout)}, release, nil
+	// Every operation on the page shares one deadline, so a selector that
+	// never appears can't stall an attempt past timeout. The cancel is
+	// handed to release so the timer is freed as soon as the attempt ends
+	// rather than lingering until the deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return rodPage{p: rodPg.Context(ctx)}, func() { release(b, l, cancel) }, nil
+}
+
+// release shuts the browser down and frees everything a successful launch
+// holds: it asks the browser to exit over CDP, falls back to killing the
+// process if that request can't be delivered (a dead connection would
+// otherwise leave Cleanup waiting forever for an exit that never comes),
+// then waits for the exit and removes the temporary profile directory
+// Launch created — b.Close() alone leaves that directory behind. cancel
+// releases the page's timeout context.
+func release(b *rod.Browser, l *launcher.Launcher, cancel context.CancelFunc) {
+	defer cancel()
+	if err := b.Close(); err != nil {
+		l.Kill()
+	}
+	l.Cleanup()
 }
 
 // killAndCleanup kills the process l started, if any, and removes its
@@ -146,8 +157,16 @@ func (r rodPage) Cookies() ([]cookie, error) {
 // rodElement adapts *rod.Element to the element interface.
 type rodElement struct{ el *rod.Element }
 
-// Input types value into the element, replacing any existing content.
-func (r rodElement) Input(value string) error { return r.el.Input(value) }
+// Input types value into the element, replacing any existing content:
+// rod's Input appends to whatever is already there (a browser-remembered
+// username, say), so the existing text is selected first and the typed
+// value overwrites the selection.
+func (r rodElement) Input(value string) error {
+	if err := r.el.SelectAllText(); err != nil {
+		return err
+	}
+	return r.el.Input(value)
+}
 
 // Click performs a single left click on the element.
 func (r rodElement) Click() error { return r.el.Click(proto.InputMouseButtonLeft, 1) }

@@ -16,31 +16,32 @@ import (
 // Client's request-building and error propagation without a real
 // (always-succeeding) sendgrid stand-in.
 type fakeMailClient struct {
-	err  error
-	last *mail.V3Mail
+	err   error
+	last  *mail.V3Mail
+	calls int
 }
 
 func (f *fakeMailClient) Send(v3mail *mail.V3Mail) error {
+	f.calls++
 	f.last = v3mail
 	return f.err
 }
 
-// assertPersonalizationHas fails the test unless fake's last captured
-// message has exactly want under field ("tos" or "ccs"). mail.V3Mail is a
-// vendored stand-in ("please do not modify") with unexported fields and no
-// getters, so this reads them the same way %+v does: through fmt's
-// built-in struct formatting, not unsafe or reflection of our own.
-func assertPersonalizationHas(t *testing.T, fake *fakeMailClient, field, want string) {
+// assertMailHas fails the test unless fake's last captured message contains
+// want under field (e.g. "tos", "ccs", "tplID"). mail.V3Mail is a vendored
+// stand-in ("please do not modify") with unexported fields and no getters,
+// so this reads them the same way %+v does: through fmt's built-in struct
+// formatting, not unsafe or reflection of our own.
+func assertMailHas(t *testing.T, fake *fakeMailClient, field, want string) {
 	t.Helper()
 
 	dump := fmt.Sprintf("%+v", fake.last)
-	if !strings.Contains(dump, field+":["+want+"]") {
-		t.Fatalf("expected personalization %s to be [%s], got: %s", field, want, dump)
+	if !strings.Contains(dump, field+":"+want) {
+		t.Fatalf("expected %s to be %s, got: %s", field, want, dump)
 	}
 }
 
 func TestNewSvc(t *testing.T) {
-
 	t.Parallel()
 
 	svc := NewSvc(Config{
@@ -63,59 +64,102 @@ func TestNewSvc(t *testing.T) {
 }
 
 func TestClientSend(t *testing.T) {
-
 	t.Parallel()
 
+	sendErr := errors.New("send failed")
+
 	testCases := map[string]struct {
+		to        []string
+		cc        []string
 		clientErr error
+		wantErr   error
+		wantCalls int
 	}{
-		"pass":            {},
-		"fail send error": {clientErr: errors.New("send failed")},
+		"pass": {
+			to:        []string{"foo@bar.com"},
+			wantCalls: 1,
+		},
+		"pass with cc": {
+			to:        []string{"foo@bar.com"},
+			cc:        []string{"cc@bar.com", "cc2@bar.com"},
+			wantCalls: 1,
+		},
+		"pass multiple to": {
+			to:        []string{"foo@bar.com", "baz@bar.com"},
+			wantCalls: 1,
+		},
+		"fail send error": {
+			to:        []string{"foo@bar.com"},
+			clientErr: sendErr,
+			wantErr:   sendErr,
+			wantCalls: 1,
+		},
+		"fail nil to": {
+			wantErr:   ErrNoRecipients,
+			wantCalls: 0,
+		},
+		"fail empty to": {
+			to:        []string{},
+			cc:        []string{"cc@bar.com"},
+			wantErr:   ErrNoRecipients,
+			wantCalls: 0,
+		},
 	}
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
 			fake := &fakeMailClient{err: tc.clientErr}
 			c := &Client{client: fake, fromName: "Foo Bar", fromAddress: "foo@bar.com"}
 
-			err := c.Send([]string{"foo@bar.com"}, json.RawMessage(`{"foo":"bar"}`), email.TplAddPolicyVehicle)
+			msg := json.RawMessage(`{"foo":"bar"}`)
 
-			if err != tc.clientErr {
-				t.Fatalf("expected error %v but got %v", tc.clientErr, err)
+			var err error
+			tpl := email.TplAddPolicyVehicle
+			if tc.cc == nil {
+				err = c.Send(tc.to, msg, tpl)
+			} else {
+				tpl = email.TplAddPolicyCoverage
+				err = c.SendWithCC(tc.to, tc.cc, msg, tpl)
 			}
 
-			assertPersonalizationHas(t, fake, "tos", "foo@bar.com")
-			assertPersonalizationHas(t, fake, "ccs", "")
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected error %v but got %v", tc.wantErr, err)
+			}
+
+			if fake.calls != tc.wantCalls {
+				t.Fatalf("expected %d provider calls but got %d", tc.wantCalls, fake.calls)
+			}
+
+			if tc.wantCalls == 0 {
+				return
+			}
+
+			assertMailHas(t, fake, "tos", fmt.Sprintf("%v", tc.to))
+			assertMailHas(t, fake, "ccs", fmt.Sprintf("%v", tc.cc))
+			assertMailHas(t, fake, "fromName", "Foo Bar")
+			assertMailHas(t, fake, "fromAddress", "foo@bar.com")
+			assertMailHas(t, fake, "tplID", string(tpl))
+			assertMailHas(t, fake, "message", fmt.Sprintf("%v", []byte(msg)))
 		})
 	}
 }
 
-func TestClientSendWithCC(t *testing.T) {
-
+// TestClientSendWrapsProviderError pins that the provider's failure is
+// wrapped with context but still reachable through errors.Is.
+func TestClientSendWrapsProviderError(t *testing.T) {
 	t.Parallel()
 
-	testCases := map[string]struct {
-		clientErr error
-	}{
-		"pass":            {},
-		"fail send error": {clientErr: errors.New("send failed")},
+	sendErr := errors.New("boom")
+	c := &Client{client: &fakeMailClient{err: sendErr}}
+
+	err := c.Send([]string{"foo@bar.com"}, json.RawMessage(`{}`), email.TplAddPolicyDriver)
+
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("expected wrapped %v but got %v", sendErr, err)
 	}
-
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-
-			fake := &fakeMailClient{err: tc.clientErr}
-			c := &Client{client: fake, fromName: "Foo Bar", fromAddress: "foo@bar.com"}
-
-			err := c.SendWithCC([]string{"foo@bar.com"}, []string{"cc@bar.com"}, json.RawMessage(`{"foo":"bar"}`), email.TplAddPolicyCoverage)
-
-			if err != tc.clientErr {
-				t.Fatalf("expected error %v but got %v", tc.clientErr, err)
-			}
-
-			assertPersonalizationHas(t, fake, "tos", "foo@bar.com")
-			assertPersonalizationHas(t, fake, "ccs", "cc@bar.com")
-		})
+	if got := err.Error(); got != "sendgrid: send failed: boom" {
+		t.Fatalf("unexpected error text %q", got)
 	}
 }
