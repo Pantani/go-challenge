@@ -14,6 +14,7 @@ type PolicyProvider interface {
 	// Policies lists the policies available to the authenticated user.
 	Policies() ([]Policy, error)
 	// DocumentDownload retrieves the document identified by downloadKey. The
-	// caller must always close the returned body.
+	// body is non-nil only when the error is nil, and the caller must close
+	// it in that case.
 	DocumentDownload(downloadKey string) (io.ReadCloser, error)
 }

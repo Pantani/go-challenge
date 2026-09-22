@@ -161,6 +161,11 @@ func TestNotifyInvalidRequest(t *testing.T) {
 			req:     notifier.Request{Topic: validReq.Topic, Recipients: validReq.Recipients},
 			wantErr: notifier.ErrMissingTemplate,
 		},
+		"blank template": {
+			ctx:     context.Background(),
+			req:     notifier.Request{Topic: validReq.Topic, Recipients: validReq.Recipients, Template: " \t"},
+			wantErr: notifier.ErrMissingTemplate,
+		},
 	}
 
 	for name, tc := range testCases {

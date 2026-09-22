@@ -85,8 +85,8 @@ func (p *Producer) Notify(ctx context.Context, req Request) error {
 	if err := email.RequireRecipient(req.Recipients); err != nil {
 		return fmt.Errorf("notify %s: %w: %w", req.Topic, ErrMissingRecipients, err)
 	}
-	if req.Template == "" {
-		return fmt.Errorf("%w: %s", ErrMissingTemplate, req.Topic)
+	if err := email.RequireTemplate(req.Template); err != nil {
+		return fmt.Errorf("notify %s: %w: %w", req.Topic, ErrMissingTemplate, err)
 	}
 	return p.email.Send(req.Recipients, req.Template, req.Vars)
 }
