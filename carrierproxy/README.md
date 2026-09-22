@@ -12,59 +12,43 @@ This challenge is to create a partial implementation of the `PolicyProvider` int
 
 ```
 carrierproxy/
-├── cmd/carrierproxy/
-│   ├── main.go            # demo binary: main() wires the real client into a testable run()
-│   └── main_test.go
 ├── carrierproxy.go        # PolicyProvider interface (the contract)
 ├── policy.go              # Policy struct
-├── errors.go              # sentinel errors any implementation can return
-└── browser/               # the go-rod-backed implementation
-    ├── client.go          # Client (implements PolicyProvider) + NewClient
+├── errors.go              # sentinel errors shared by implementations
+├── cmd/carrierproxy/      # demo binary: main() wires the real client into a testable run()
+└── browser/               # go-rod implementation of PolicyProvider
+    ├── client.go          # Client + NewClient
     ├── login.go           # Login
     ├── policies.go        # Policies
     ├── documents.go       # DocumentDownload
-    ├── session.go         # shared by all three: re-auth, retry, credential storage
-    ├── options.go         # functional options (With*) + their defaults
+    ├── session.go         # re-auth, retries, credential storage (shared by all three)
+    ├── options.go         # With* options and their defaults
     ├── rod.go             # the only file that talks to go-rod
     ├── http.go            # the only file that talks to net/http
-    ├── testdata/          # fixture site used by TestLoginIntegration
-    │   ├── login.html
-    │   ├── policies.html
-    │   └── policy-42.txt
-    └── *_test.go
+    └── testdata/          # local fixture site for the integration test
 ```
-
-The root `carrierproxy` package is just the contract — the interface, the shared `Policy` type, and sentinel errors any implementation can return — with no implementation code of its own. `browser` is one concrete implementation of that contract. `cmd/carrierproxy` holds only the demo entrypoint.
-
-`browser` isn't named `rod` because that's the import name of the `go-rod/rod` dependency itself — a same-named subpackage would compile fine here (no file imports both at once) but would be confusing to read.
 
 ## What's implemented
 
-All three `PolicyProvider` methods are implemented against a real site using [go-rod](https://github.com/go-rod/rod):
+All three `PolicyProvider` methods, using go-rod:
 
-* **`Login`** ([`browser/login.go`](browser/login.go)) drives a headless browser through the target's login form (clearing anything the browser pre-filled before typing) and classifies the result.
-* **`Policies`** ([`browser/policies.go`](browser/policies.go)) re-authenticates, navigates to a configured page, and reads each matched row's first two cells as `CarrierID`/`PolicyNumber`.
-* **`DocumentDownload`** ([`browser/documents.go`](browser/documents.go)) re-authenticates, then does a plain HTTP GET for a configured URL, attaching the browser session's cookies so the download is authenticated too.
+* **`Login`** fills in the login form (clearing anything pre-filled first), submits it and classifies the result.
+* **`Policies`** logs in again, opens a configured page and reads each row's first two cells as `CarrierID`/`PolicyNumber`.
+* **`DocumentDownload`** logs in again, then downloads a configured URL over plain HTTP using the browser session's cookies.
 
-`Policies` and `DocumentDownload` need their own configuration (there's no way to guess a "policies page" or "document URL" shape for an arbitrary site) and require a prior successful `Login` — see [Reusable, not hardcoded to one site](#reusable-not-hardcoded-to-one-site) below. `browser.Client` satisfies the full `PolicyProvider` interface, checked at compile time.
+`Policies` and `DocumentDownload` need their own URL options and a prior successful `Login`.
 
-## Idempotent and resilient
+### Behavior
 
-* **Retries.** All three methods retry transient failures (a slow-to-render form, a dropped connection, a browser that's slow to start) up to `WithRetries` additional times (default 2, so 3 attempts total), waiting `WithRetryDelay` between them (default 1s). Three failures are **never** retried because another attempt could only repeat them: `carrierproxy.ErrInvalidCredentials` (the same credentials would just fail again, and retrying them against a real site risks tripping a lockout), `carrierproxy.ErrMalformedResponse` (the page's shape won't change) and `carrierproxy.ErrNotConfigured` (the `Client` itself is missing something — this is also checked *before* a browser is launched, so a misconfigured client never submits credentials anywhere). This lives in one place, [`Client.withRetries`](browser/session.go), that every method's single-attempt logic is written against, so the policy only needs testing once (`browser/session_test.go`) — see [`TestClientWithRetries`](browser/session_test.go).
-* **Stateless attempts.** Every attempt — including every retry — starts from a fresh browser page and a fresh login; nothing from a failed attempt is reused. That's what makes retrying safe: there's no partially-broken session to carry forward, and calling `Login`, `Policies` or `DocumentDownload` again after a failure behaves exactly like calling it the first time.
-* **Guaranteed cleanup.** The page opened by an attempt is always released before that attempt returns (`defer`/explicit close on every path, including panics unwinding through a `defer`), whether it succeeds, fails, or is abandoned partway through — so a failed attempt never leaks a browser process into the next one. Releasing asks the browser to exit over its DevTools connection and, if that request can't be delivered, kills the process instead, then waits for the exit and removes the temporary profile directory (`release` in [`browser/rod.go`](browser/rod.go)).
-* **Safe for concurrent and repeated use.** A `*Client` has no per-call mutable state except the remembered credentials, which are guarded by a mutex (`browser/session.go`); `TestClientLoginConcurrentSafety` (`browser/login_test.go`) drives 20 concurrent `Login` calls on one `Client` under `-race`. Calling `Login` again later (e.g. to refresh an expired session) simply replaces the remembered credentials — nothing needs to be reset by hand.
-* **Classifiable errors.** Errors are wrapped (`%w`), not stringified, so a caller can tell failure modes apart: `errors.Is(err, carrierproxy.ErrInvalidCredentials)` (bad login), `errors.Is(err, carrierproxy.ErrNotLoggedIn)` (`Policies`/`DocumentDownload` called before a successful `Login`), `errors.Is(err, carrierproxy.ErrNotConfigured)` (missing `WithPoliciesURL`/`WithDocumentURL`), or `errors.Is(err, context.DeadlineExceeded)` (a selector never appeared within `WithTimeout` — go-rod surfaces this directly, see `TestLoginIntegration/a_wrong_selector_times_out_with_a_classifiable_error`).
+* **Retries.** Transient failures are retried `WithRetries` more times (default 2), `WithRetryDelay` apart (default 1s). `ErrInvalidCredentials`, `ErrMalformedResponse` and `ErrNotConfigured` are never retried, since another attempt would fail the same way; retrying bad credentials could also trip a lockout. The policy lives in `Client.withRetries` (`browser/session.go`).
+* **Fresh attempts.** Each attempt, retries included, uses a new browser page and a new login, so nothing from a failed attempt carries over.
+* **Cleanup.** Every attempt releases its browser before returning: it asks the browser to exit, kills it if that fails, and removes the temporary profile directory.
+* **Concurrency.** A `Client` is safe for concurrent use; the only shared state is the remembered credentials, guarded by a mutex. `TestClientLoginConcurrentSafety` runs 20 concurrent logins under `-race`.
+* **Errors** are wrapped with `%w`, so callers can use `errors.Is` with `carrierproxy.ErrInvalidCredentials`, `ErrNotLoggedIn`, `ErrNotConfigured`, or `context.DeadlineExceeded` (a selector didn't appear within `WithTimeout`).
 
-## Reusable, not hardcoded to one site
+## Configuration
 
-`browser.NewClient` takes the login URL as a required argument — there is no built-in default site baked into the library. The demo site is a choice made by `cmd/carrierproxy` (the example program), not by the `browser` package itself:
-
-```go
-client := browser.NewClient("https://your-target-site.example/login")
-```
-
-Everything about *how* that site's form is found, and how `Policies`/`DocumentDownload` reach their own pages, is overridable through functional options (`browser/options.go`), each with a sensible default where one makes sense:
+`browser.NewClient` takes the login URL; nothing is hardcoded to one site. Selectors and timings have defaults matching the common `#username`/`#password` form, and each can be overridden:
 
 ```go
 client := browser.NewClient(
@@ -78,8 +62,7 @@ client := browser.NewClient(
     browser.WithRetries(3),                       // default: 2
     browser.WithRetryDelay(2*time.Second),        // default: 1s
 
-    // Policies and DocumentDownload have no site-agnostic default and are
-    // disabled (return carrierproxy.ErrNotConfigured) until set:
+    // No default; Policies/DocumentDownload return ErrNotConfigured until set:
     browser.WithPoliciesURL("https://your-target-site.example/policies"),
     browser.WithPolicyRowSelector(".policy-row"), // default: "tr"
     browser.WithPolicyCellSelector(".cell"),      // default: "td"
@@ -89,69 +72,38 @@ client := browser.NewClient(
 )
 ```
 
-Only pass the options a given site actually needs; everything else keeps its default. This is the same pattern used by [`ignite/cli`'s `xast` package](https://github.com/ignite/cli/blob/main/ignite/pkg/xast/global.go): an unexported `options` struct with defaults from `newOptions()`, an exported `Option func(*options)` type, and one `WithX` constructor per configurable field, applied in a loop inside `NewClient`.
-
 ## Design
 
-The go-rod-specific code is isolated behind two small interfaces in [`browser/rod.go`](browser/rod.go):
+go-rod is isolated behind two small interfaces, `page` and `element`, in `browser/rod.go`. `rodPage`/`rodElement` adapt go-rod to them, and `launchPage` starts the browser. All the decision logic (what to click, how to read the result, which error to return) is written against those interfaces, so it is unit tested with fakes. `Client.newPage` and `Client.fetch` are function fields that tests replace.
 
-```go
-type page interface {
-    Navigate(url string) error
-    WaitLoad() error
-    Element(selector string) (element, error)
-    Elements(selector string) ([]element, error)
-    Cookies() ([]cookie, error)
-}
+`launchPage` uses a locally installed Chrome/Chromium when one exists and otherwise lets go-rod download one (cached under `~/.cache/rod`).
 
-type element interface {
-    Input(value string) error
-    Click() error
-    Attribute(name string) (string, error)
-    Text() (string, error)
-    Elements(selector string) ([]element, error)
-}
-```
-
-`rodPage`/`rodElement` adapt `*rod.Page`/`*rod.Element` to these interfaces, and `launchPage` is the only function that launches a browser and connects go-rod. Everything else — `Login` (`login.go`), `Policies` (`policies.go`), `DocumentDownload` (`documents.go`), and the re-auth/retry machinery they share (`session.go`) — is written against `page`/`element`, so the whole decision-making flow (what to click, how to read a result, which rows to keep, which error to return) is testable without a real browser. `Client.newPage` is a function field defaulting to `launchPage`, and `Client.fetch` (the plain-HTTP download, `http.go`) defaults to `fetchWithCookies`; tests swap both for fakes.
-
-Every function is kept small and single-purpose on purpose: the deepest orchestration sits at cyclomatic complexity 5 and cognitive complexity 6 (package average 2.4/4.1). The repository's CI enforces a ceiling of 6/8 per non-test function via [`gocyclo`](https://github.com/fzipp/gocyclo) and [`gocognit`](https://github.com/uudashr/gocognit) (`.github/workflows/complexity.yml`); to check locally:
+Functions stay within the repo's complexity limits (cyclomatic ≤ 6, cognitive ≤ 8), enforced in CI:
 
 ```bash
 golangci-lint run --config ../.golangci-complexity.yml ./...
-# or, for the per-function numbers:
-go run github.com/fzipp/gocyclo/cmd/gocyclo@latest -avg -ignore '_test.go' .
-go run github.com/uudashr/gocognit/cmd/gocognit@latest -avg -ignore '_test.go' .
 ```
 
 ## Usage
 
-Run the demo binary, which calls `Login` against [the-internet.herokuapp.com/login](https://the-internet.herokuapp.com/login) — a public site built for browser-automation practice, published with its own test credentials — with credentials from the environment:
+The demo binary logs into [the-internet.herokuapp.com/login](https://the-internet.herokuapp.com/login), a public practice site with published test credentials:
 
 ```bash
 CARRIERPROXY_USERNAME=tomsmith CARRIERPROXY_PASSWORD='SuperSecretPassword!' go run ./cmd/carrierproxy
 ```
 
-Both variables are required; if either is missing the program exits with an error naming them instead of contacting the site. On success it prints `login to <url> succeeded as <username>`; on failure the wrapped error (`errors.Is`-classifiable as described above) is logged and the exit status is non-zero. The demo URL is fixed in `cmd/carrierproxy/main.go` because the point of the binary is to demonstrate the library, not to be a general CLI — use the library directly for any other site.
+Both variables are required. On success it prints `login to <url> succeeded as <username>`; on failure it logs the error and exits non-zero.
 
-(The test suite below targets a local fixture instead, not this site — see [Testing](#testing).)
-
-Or use `browser.Client` from your own code, against any site with a login form:
+From your own code:
 
 ```go
-import "github.com/gloveboxhq/glovebox-go-code-challenge/carrierproxy/browser"
-
-client := browser.NewClient("https://your-target-site.example/login" /* , With* options as needed */)
+client := browser.NewClient("https://your-target-site.example/login" /* , options */)
 if err := client.Login(username, password); err != nil {
-    // errors.Is(err, carrierproxy.ErrInvalidCredentials) means the site rejected the
-    // credentials; anything else is a browser/navigation/element failure.
+    // errors.Is(err, carrierproxy.ErrInvalidCredentials): the site rejected them.
 }
-
-policies, err := client.Policies()                 // needs WithPoliciesURL
+policies, err := client.Policies()                   // needs WithPoliciesURL
 doc, err := client.DocumentDownload("policy-42.pdf") // needs WithDocumentURL
 ```
-
-Chrome/Chromium isn't required to be pre-installed: go-rod downloads a matching revision on first run if it can't find one (cached under `~/.cache/rod`).
 
 ## Testing
 
@@ -159,24 +111,17 @@ Chrome/Chromium isn't required to be pre-installed: go-rod downloads a matching 
 go test ./...
 ```
 
-This runs every test except the real-browser integration test, which is skipped unless credentials are supplied (see below). No network access is needed, and no browser is required either: the tests that do need one (see below) skip themselves when `launcher.LookPath()` finds no local Chrome/Chromium, so the default run never downloads a browser. CI runs it as `go test ./... -race -coverprofile=cover.out` and enforces a 90% minimum per module (`.github/workflows/ci.yml`).
+Needs no network. Tests that need a browser skip themselves when no local Chrome/Chromium is found. CI runs `go test ./... -race` and requires at least 90% coverage per module.
 
-**Coverage** (`go test -race -coverprofile=cover.out ./... && go tool cover -func=cover.out`): every function in `browser/login.go`, `browser/policies.go`, `browser/documents.go`, `browser/session.go`, `browser/options.go` and `browser/client.go` (the actual challenge logic) is at **100%**, as is `run()` in `cmd/carrierproxy/main.go` (tested with a fake `PolicyProvider`; only the three-line `main()` that wires in the real environment and browser is left out). With a local Chrome present the module is at ~97% overall; without one, the browser-driven tests below skip and the go-rod adapter in `browser/rod.go` stays uncovered. Beyond the fake-driven unit tests:
+* **Unit tests** cover the login, policies, documents, session and options logic at 100% using fake pages, and `run()` using a fake `PolicyProvider`.
+* **`browser/rod_test.go`** covers the go-rod adapter: launch-failure cleanup (no browser needed), and every `rodPage`/`rodElement` method against a real headless browser, including their timeout errors.
+* **`cmd/carrierproxy/e2e_test.go`** runs the CLI's `run` through a real browser against a local login page.
+* **`browser/integration_test.go`** runs only when `CARRIERPROXY_USERNAME` and `CARRIERPROXY_PASSWORD` are set (CI sets placeholders). It drives a real browser against a local fixture site (`browser/testdata/`) that accepts exactly those credentials:
 
-* `browser/rod_test.go` — `TestLaunchPageWithFailedLaunch` points `launchPageWith` at a missing binary and at one that exits without a DevTools URL, covering both launch-failure cleanup paths with no browser at all. `TestRodAdapter` and `TestRodAdapterErrors` drive every `rodPage`/`rodElement` method against a real headless Chrome and a local page, including the error each one returns once the page's timeout expires.
-* `cmd/carrierproxy/e2e_test.go` — `TestRunEndToEnd` runs `run` with a real `browser.Client` through a real browser against a local login page.
+  ```bash
+  CARRIERPROXY_USERNAME=testuser CARRIERPROXY_PASSWORD=testpass go test ./... -run TestLoginIntegration
+  ```
 
-To fulfil "test(s) ... that accept environment variables for the credentials", set `CARRIERPROXY_USERNAME`/`CARRIERPROXY_PASSWORD` to also run the integration test (CI sets placeholder values for this):
+  It checks that valid credentials log in and invalid ones fail without retrying, that a missing selector times out with `context.DeadlineExceeded`, that an unreachable host fails, and that `Policies`/`DocumentDownload` return `ErrNotLoggedIn` before login and real data after it. It uses a local site rather than the public demo so the tests don't depend on a third-party site staying up.
 
-```bash
-CARRIERPROXY_USERNAME=testuser CARRIERPROXY_PASSWORD=testpass go test ./... -v -run TestLoginIntegration
-```
-
-This still launches a real, headless Chrome via go-rod (downloaded automatically on first run if none is found — see [Usage](#usage)) — but instead of a real external site, it drives that browser against **a local fixture site** (`browser/testdata/`, served in-process over `httptest.NewServer` by `browser/fixturesite_test.go`): a login form, a session-cookie-gated policies table, and a session-cookie-gated document download endpoint. This is deliberately *not* the same public site `cmd/carrierproxy` targets — a test suite that depends on a third-party site's uptime, markup staying stable, and (for `/download`) a shared, other-people's-test-runs-included file listing is exactly the kind of flakiness worth avoiding. The fixture site is configured to accept whichever username/password the test was given, so it's still genuinely exercised end to end through the environment variables, just without leaving the machine:
-
-* Valid credentials succeed; invalid ones are rejected (and, with `WithRetries(2)` set, confirmed *not* retried).
-* A selector that never appears times out and the error unwraps to `context.DeadlineExceeded`.
-* An unreachable host (`.invalid`, [reserved by RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) for exactly this) fails promptly rather than hanging.
-* `Policies` and `DocumentDownload` each return `carrierproxy.ErrNotLoggedIn` before `Login`, then succeed for real after it — proving the auth-gating itself, which a public, ungated practice page couldn't have.
-
-(The default credentials above are placeholders the fixture site is told to expect for that one run — not real secrets, and not tied to any specific value; any username/password pair works as long as both sides of the test are told the same one, which is exactly what happens here.)
+Only `main()` itself is left uncovered.

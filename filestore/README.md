@@ -44,4 +44,4 @@ Every operation checks its context before doing any work and returns `ctx.Err()`
 go test ./... -race -cover
 ```
 
-`filestore_test.go` holds a contract suite that runs the same scenarios (success, missing source, destination conflict, self-copy, cancelled context) against both providers. `filestore/cmd/filestore` factors its logic into a `run()` helper that stores, copies and reads a file back; the `main` wrapper itself is intentionally left untested, since it calls `log.Fatal`.
+`filestore_test.go` holds a contract suite that runs the same scenarios (success, missing source, destination conflict, self-copy, cancelled context) against both providers. `mock` and `s3` also have their own tests for the same error paths, so each package meets CI's 90% per-module coverage minimum on its own. `filestore/cmd/filestore` factors its logic into a `run()` helper that stores, copies and reads a file back; the `main` wrapper itself is intentionally left untested, since it calls `log.Fatal`.

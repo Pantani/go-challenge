@@ -68,7 +68,7 @@ err := producer.NotifyTopic(ctx, notifier.TopicPolicyRenewal, notifier.PolicyRen
 go test ./... -v -cover
 ```
 
-`notifier`, `channels/email`, `channels/email/mockemail`, and `channels/email/sendgrid` are all at **100%** statement coverage. `cmd/notifier` sits at 69.2%: the `run(ctx, mail)` tests exercise the demo end to end (success, provider failure via `mockemail.Client.SetSendError`, and a cancelled context), and only the `main()` wrapper's `log.Fatal` path is left uncovered, the same pattern `filestore/cmd/filestore` uses. Across the module (`-coverpkg=./...`) that is **96.1%**.
+`notifier`, `channels/email`, `channels/email/mockemail` and `channels/email/sendgrid` are at 100% statement coverage. The `run(ctx, mail)` tests in `cmd/notifier` cover the demo end to end (success, provider failure via `mockemail.Client.SetSendError`, cancelled context); only `main()`'s `log.Fatal` path is uncovered. CI requires at least 90% per module.
 
 ### Running the demo
 
